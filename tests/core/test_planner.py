@@ -83,6 +83,25 @@ class TestClassification:
         assert upd.payload == {"SbjNum": "102", "I7_1_2": "BOB", "Q32": 99, "No": 2}
 
 
+class TestFullColumnPayload:
+    def test_add_payload_includes_unmapped_store_column(self):
+        rows = [{"No": 1, "SbjNum": "101", "I7_1_2": "x", "Q32": 1, "Extra": "keep"}]
+        src = [{"SbjNum": "104", "T_QPM1_1": "Dave", "Q32": 44}]
+        p = make_plan(store_rows=rows, source_records=src)
+        add = next(a for a in p.actions if a.kind == "add")
+        assert add.payload["Extra"] == ""       # unmapped col present, blank
+        assert set(add.payload) == {"No", "SbjNum", "I7_1_2", "Q32", "Extra"}
+
+    def test_update_payload_preserves_unmapped_store_column(self):
+        rows = [{"No": 2, "SbjNum": "102", "I7_1_2": "Bob", "Q32": 22, "Extra": "keep"}]
+        src = [{"SbjNum": "102", "T_QPM1_1": "BOB", "Q32": 99}]
+        p = make_plan(store_rows=rows, source_records=src)
+        upd = next(a for a in p.actions if a.kind == "update")
+        assert upd.payload["Extra"] == "keep"   # untouched store value retained
+        assert upd.payload["Q32"] == 99
+        assert upd.payload["No"] == 2
+
+
 class TestDeletePolicy:
     def test_tracked_only_deletes_none_when_untracked(self):
         p = make_plan(delete_policy="tracked_only")

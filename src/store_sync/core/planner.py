@@ -77,13 +77,21 @@ def plan(
     match: ColumnBinding,
     columns: list[ColumnBinding],
     id_column: str,
+    store_columns: list[str] | None = None,
     delete_policy: str = "full_history",
     tracked: set[str] | None = None,
 ) -> Plan:
-    """Classify every source record and store row into a write plan."""
+    """Classify every source record and store row into a write plan.
+
+    ``store_columns`` is the store's full column set. STG ``AddRow``/``UpdateRow``
+    reset any omitted column to its default, so payloads must carry every column:
+    ADD blanks unmapped columns, UPDATE retains the existing row's values.
+    """
     p = Plan()
     p.next_tag = _next_tag(store_rows, id_column)
     tracked = {_s(t) for t in (tracked or set())}
+    if store_columns is None:
+        store_columns = sorted({k for r in store_rows for k in r})
 
     # -- index the store by match key; duplicates are a hard conflict ---------
     store_by_key: dict[str, dict] = {}
@@ -117,8 +125,9 @@ def plan(
         )
 
     # -- classify ------------------------------------------------------------
-    def _payload(rec: dict, key: str, id_value) -> dict:
-        payload = project(columns, rec)
+    def _add_payload(rec: dict, key: str, id_value) -> dict:
+        payload = {c: "" for c in store_columns}
+        payload.update(project(columns, rec))
         payload[match.store_col] = key
         payload[id_column] = id_value
         return payload
@@ -128,7 +137,7 @@ def plan(
         if key in src_dups:
             continue
         p.actions.append(
-            Action("add", key, id_column, next_tag, _payload(src_by_key[key], key, next_tag))
+            Action("add", key, id_column, next_tag, _add_payload(src_by_key[key], key, next_tag))
         )
         next_tag += 1
 
@@ -139,7 +148,8 @@ def plan(
         row = store_by_key[key]
         desired = project(columns, rec)
         id_value = row.get(id_column)
-        payload = dict(desired)
+        payload = dict(row)  # full existing store row retains unmapped values
+        payload.update(desired)
         payload[match.store_col] = key
         payload[id_column] = id_value
         if any(_s(desired[c.store_col]) != _s(row.get(c.store_col)) for c in columns):

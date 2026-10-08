@@ -97,6 +97,7 @@ def run_sync(
 
     # 2) load the store ------------------------------------------------------
     store_rows = client.get_store(config.store.id)
+    store_columns = sorted({k for r in store_rows for k in r})
 
     # 3) plan ----------------------------------------------------------------
     tracked = state.tracked_keys(config.job)
@@ -106,6 +107,7 @@ def run_sync(
         match=match,
         columns=config.binding.columns,
         id_column=config.store.id_column,
+        store_columns=store_columns,
         delete_policy=config.write.delete_policy,
         tracked=tracked,
     )
