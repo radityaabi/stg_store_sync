@@ -169,8 +169,16 @@ Because the filter is advisory (a term may silently drop), the response is
 **verified** for every needed var, and the result is **projected to the configured
 columns** after the pull — the filter is an optimisation, the projection is the
 source of truth. Fall back to a full export if a needed var cannot be produced by
-any term. The tool derives the pull term from the configured source var(s): strip
-the answer/loop/suffix adornment to the base question name.
+any term.
+
+The pull term is the **question-level base name**, which is **not** always
+derivable from the answer-level var by a fixed rule (`T_QPM1_1`→`QPM1`, but the
+loop var `I_351_Q46a`→`Q46a` breaks a simple strip). So:
+
+- the job **declares** a `pull_name` per column (or per question group), and/or
+- **preflight offers it** from the survey's live variable list.
+
+Never guess the base name at sync time.
 
 ---
 
@@ -420,9 +428,9 @@ binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key
   columns:                         # source → store alias pairs
-    - { source_var: "T_QPM1_1", store_col: "I7_1_2", kind: text }
-    - { source_var: "T_QPM1_3", store_col: "I8a_1",  kind: text }
-    - { source_var: "Q32",      store_col: "Q32",    kind: text }
+    - { source_var: "T_QPM1_1", store_col: "I7_1_2", pull_name: "QPM1", kind: text }
+    - { source_var: "T_QPM1_3", store_col: "I8a_1",  pull_name: "QPM1", kind: text }
+    - { source_var: "Q32",      store_col: "Q32",    pull_name: "Q32",  kind: text }
 write:
   op: full_sync                    # add + update + delete
   dry_run: true
