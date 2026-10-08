@@ -51,6 +51,11 @@ typography:
     fontSize: 24px
     fontWeight: 700
     lineHeight: 1.2
+  title:
+    fontFamily: "\"Segoe UI\", \"Roboto\", sans-serif"
+    fontSize: 18px
+    fontWeight: 700
+    lineHeight: 1.2
   heading:
     fontFamily: "\"Segoe UI\", \"Roboto\", sans-serif"
     fontSize: 15px
@@ -359,7 +364,7 @@ Rounded corners are modest:
 
 - **header-gradient**: `QFrame#GradientHeader` with
   `linear-gradient(135deg, #667eea, #764ba2)`. Top of the window. White title
-  (18px / 700), `#e2e8f0` breadcrumb, status dot `#86efac` → recolored per state.
+  (`typography.title`, 18px / 700), `#e2e8f0` breadcrumb, status dot `#86efac` → recolored per state.
   Fixed height.
 - **Status indicator**: header `QLabel` with a colored dot + label matching the
   current state (`status-ok`, `status-warn`, `status-fail`, `status-cancelled`).

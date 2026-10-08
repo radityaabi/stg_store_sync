@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from store_sync.core.registry import JobEntry
+from store_sync.ui import theme
 from store_sync.ui.models import JobListModel
 
 
@@ -49,6 +50,8 @@ class Dashboard(QWidget):
         root.addWidget(self._queue_strip())
         root.addWidget(self._toolbar())
         root.addWidget(self._table(), stretch=1)
+        # Freshly-constructed dashboard has an empty model: show the empty hint.
+        self._update_empty_state()
 
     def _stats_row(self) -> QWidget:
         w = QWidget()
@@ -75,6 +78,7 @@ class Dashboard(QWidget):
         value.setObjectName("StatValue")
         caption = QLabel(label.upper())
         caption.setObjectName("StatCaption")
+        theme.style_caps(caption)
         lay.addWidget(value)
         lay.addWidget(caption)
         self._stat_labels[key] = value
@@ -87,6 +91,7 @@ class Dashboard(QWidget):
         lay.setContentsMargins(12, 8, 12, 8)
         caption = QLabel("QUEUE")
         caption.setObjectName("QueueCaption")
+        theme.style_caps(caption, px=12)
         self.queue_label = QLabel("idle")
         self.queue_label.setObjectName("QueueLabel")
         lay.addWidget(caption)
@@ -110,7 +115,7 @@ class Dashboard(QWidget):
         stop_btn = QPushButton("⏹ Stop")
         stop_btn.setObjectName("btn_danger")
         stop_btn.clicked.connect(self.stop_requested.emit)
-        edit_btn = QPushButton("✏ Edit")
+        edit_btn = QPushButton("✏️ Edit")
         edit_btn.clicked.connect(self._on_edit)
         delete_btn = QPushButton("🗑 Delete")
         delete_btn.setObjectName("btn_danger")
@@ -169,6 +174,10 @@ class Dashboard(QWidget):
     # -- app API -----------------------------------------------------------
     def set_entries(self, entries: list[JobEntry]) -> None:
         self.model.set_entries(entries)
+        self._update_empty_state()
+
+    def _update_empty_state(self) -> None:
+        """Show the friendly hint whenever the model has no rows."""
         self.empty_label.setVisible(self.model.rowCount() == 0)
 
     def set_queue(self, active: str | None, pending: list[str]) -> None:

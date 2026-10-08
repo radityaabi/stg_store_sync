@@ -211,7 +211,7 @@ class JobDetail(QWidget):
         self.preflight_button = QPushButton("✔ Run preflight")
         self.preflight_button.setObjectName("btn_warning")
         self.preflight_button.clicked.connect(self.preflight_requested.emit)
-        self.approve_button = QPushButton("▶️ Approve binding")
+        self.approve_button = QPushButton("▶ Approve binding")
         self.approve_button.setObjectName("btn_success")
         self.approve_button.clicked.connect(self.approve)
         self.save_button = QPushButton("💾 Save")

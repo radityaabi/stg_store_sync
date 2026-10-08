@@ -92,13 +92,13 @@ def test_buttons_carry_design_icons_and_object_names():
     assert d.refresh_button.text().startswith("🔄")
 
 
-def test_empty_state_visible_only_without_rows():
+def test_empty_state_visible_immediately_and_toggled():
     d = Dashboard()
-    # Widget not shown; assert on the hidden flag, not isVisible().
-    assert d.empty_label.isHidden() is True  # before any entries
-    d.set_entries([])
+    # Hidden flag reflects emptiness from construction (no set_entries needed).
     assert d.empty_label.isHidden() is False
     d.set_entries([E("a")])
     assert d.empty_label.isHidden() is True
+    d.set_entries([])
+    assert d.empty_label.isHidden() is False
 
 

@@ -44,8 +44,15 @@ from store_sync.core.sync import run_preflight, run_sync  # noqa: E402
 from store_sync.ui.main_window import MainWindow  # noqa: E402
 from store_sync.ui.mapping_io import export_template, parse_mapping  # noqa: E402
 from store_sync.ui.scheduler_thread import SchedulerThread  # noqa: E402
+from store_sync.ui import theme  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Runtime header-dot colors from the shared theme (DESIGN.md `status-dot` + the
+# two runtime amber/red shades). Kept as locals for readable call sites.
+_STATUS_OK = theme.RUNTIME_STATUS["ok"]
+_STATUS_WARN = theme.RUNTIME_STATUS["warn"]
+_STATUS_FAIL = theme.RUNTIME_STATUS["fail"]
 
 
 def _default_db_path() -> Path:
@@ -299,14 +306,14 @@ class Controller:
     def _on_queue_changed(self, state) -> None:
         self.window.dashboard.set_queue(state.active, state.pending)
         if state.active:
-            self.window.set_status(f"running {state.active}", "#fbbf24")
+            self.window.set_status(f"running {state.active}", _STATUS_WARN)
         else:
-            self.window.set_status("ready", "#86efac")
+            self.window.set_status("ready", _STATUS_OK)
         self._refresh()
 
     def _on_due(self, name: str) -> None:
         # `Scheduler.tick` already enqueued the job; this is UI feedback only.
-        self.window.set_status(f"scheduled {name}", "#fbbf24")
+        self.window.set_status(f"scheduled {name}", _STATUS_WARN)
 
     # -- refresh -----------------------------------------------------------
 
@@ -381,14 +388,14 @@ class Controller:
     def _save_from_detail(self) -> None:
         name = self._detail_name or ""
         if not name:
-            self.window.set_status("save needs a name", "#f87171")
+            self.window.set_status("save needs a name", _STATUS_FAIL)
             return
         detail = self.window.job_detail
         try:
             job = self._job_from_detail()
         except ValueError:
             logger.exception("controller: invalid config for %r", name)
-            self.window.set_status("config error", "#f87171")
+            self.window.set_status("config error", _STATUS_FAIL)
             return
         if self.save(
             name,
@@ -396,9 +403,9 @@ class Controller:
             schedule=detail.schedule_edit.text().strip(),
             enabled=detail.enabled_check.isChecked(),
         ):
-            self.window.set_status(f"saved {name}", "#86efac")
+            self.window.set_status(f"saved {name}", _STATUS_OK)
         else:
-            self.window.set_status(f"save failed: {name}", "#f87171")
+            self.window.set_status(f"save failed: {name}", _STATUS_FAIL)
 
     def _approve(self) -> None:
         # `JobDetail.approve()` has already checked the enabled box; persist the
@@ -411,7 +418,7 @@ class Controller:
             job = self._job_from_detail()
         except ValueError:
             logger.exception("controller: invalid config for %r", name)
-            self.window.set_status("config error", "#f87171")
+            self.window.set_status("config error", _STATUS_FAIL)
             return
         if self.save(
             name,
@@ -419,9 +426,9 @@ class Controller:
             schedule=detail.schedule_edit.text().strip(),
             enabled=detail.enabled_check.isChecked(),
         ):
-            self.window.set_status(f"binding approved: {name}", "#86efac")
+            self.window.set_status(f"binding approved: {name}", _STATUS_OK)
         else:
-            self.window.set_status(f"approve failed: {name}", "#f87171")
+            self.window.set_status(f"approve failed: {name}", _STATUS_FAIL)
 
     def _preflight(self) -> None:
         w = self.window
@@ -429,16 +436,16 @@ class Controller:
             job = self._job_from_detail()
         except ValueError:
             logger.exception("controller: invalid config for preflight")
-            w.set_status("config error", "#f87171")
+            w.set_status("config error", _STATUS_FAIL)
             return
-        w.set_status("preflight...", "#fbbf24")
+        w.set_status("preflight...", _STATUS_WARN)
         client = None
         try:
             client = self._client()
             report, pull_terms = run_preflight(job, client=client)
         except Exception:  # noqa: BLE001 - surface any failure to operator
             logger.exception("controller: preflight failed")
-            w.set_status("preflight error", "#f87171")
+            w.set_status("preflight error", _STATUS_FAIL)
             return
         finally:
             if client is not None:
@@ -455,7 +462,7 @@ class Controller:
         w.job_detail.set_preflight(rows)
         w.set_status(
             "preflight ok" if report.ok else "preflight blocked",
-            "#86efac" if report.ok else "#f87171",
+            _STATUS_OK if report.ok else _STATUS_FAIL,
         )
 
     # -- mapping import / export -------------------------------------------
@@ -490,13 +497,13 @@ class Controller:
             parsed, errors = parse_mapping(path, store_cols, source_vars)
         except Exception:  # noqa: BLE001
             logger.exception("controller: mapping import failed")
-            w.set_status("import error", "#f87171")
+            w.set_status("import error", _STATUS_FAIL)
             return
         if errors:
-            w.set_status("import rejected", "#f87171")
+            w.set_status("import rejected", _STATUS_FAIL)
             return
         w.job_detail.binding_model.set_columns(parsed)
-        w.set_status(f"imported {len(parsed)} column(s)", "#fbbf24")
+        w.set_status(f"imported {len(parsed)} column(s)", _STATUS_WARN)
 
     def _export_mapping(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -513,9 +520,9 @@ class Controller:
             export_template(path, store_cols)
         except Exception:  # noqa: BLE001
             logger.exception("controller: mapping export failed")
-            w.set_status("export error", "#f87171")
+            w.set_status("export error", _STATUS_FAIL)
             return
-        w.set_status(f"template written: {path}", "#86efac")
+        w.set_status(f"template written: {path}", _STATUS_OK)
 
 
 def main() -> int:

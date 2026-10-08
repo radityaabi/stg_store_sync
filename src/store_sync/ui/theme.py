@@ -46,6 +46,12 @@ TOKENS: dict = {
         "warning": "#F59E0B",
         "warning-deep": "#D97706",
         "info": "#6366F1",
+        "teal": "#0D9488",
+        "teal-deep": "#0F766E",
+        "blue": "#2563EB",
+        "blue-deep": "#1D4ED8",
+        "green": "#16A34A",
+        "green-deep": "#15803D",
         "display-value": "#111827",
         "console-bg": "#0F172A",
         "console-text": "#E2E8F0",
@@ -59,6 +65,7 @@ TOKENS: dict = {
         "body": {"fontSize": "13px", "fontWeight": 400},
         "display": {"fontSize": "29px", "fontWeight": 700},
         "stat-value": {"fontSize": "24px", "fontWeight": 700},
+        "title": {"fontSize": "18px", "fontWeight": 700},
         "heading": {"fontSize": "15px", "fontWeight": 600},
         "label": {"fontSize": "13px", "fontWeight": 600},
         "label-caps": {"fontSize": "12px", "fontWeight": 600, "letterSpacing": "0.02em"},
@@ -102,11 +109,32 @@ _T: dict[str, str] = {
     "surface_hover": _C["surface-hover"],
     "group_text": _C["group-text"],
     "status_dot": _C["status-dot"],
+    # Status / severity pill colors — DESIGN.md `components` entries (pastel bg,
+    # saturated text); not part of the frontmatter palette, so named here.
+    "status_ok_bg": "#ECFDF5",
+    "status_ok_fg": "#047857",
+    "status_warn_bg": "#FFF7ED",
+    "status_warn_fg": "#C2410C",
+    "status_fail_bg": "#FEF2F2",
+    "status_fail_fg": "#B91C1C",
+    "status_cancelled_bg": "#F3F4F6",
+    "status_cancelled_fg": "#4B5563",
+    "sev_critical_bg": "#FEF2F2",
+    "sev_critical_fg": "#B91C1C",
+    "sev_high_bg": "#FEF3C7",
+    "sev_high_fg": "#B45309",
+    "sev_medium_bg": "#FFF7ED",
+    "sev_medium_fg": "#C2410C",
+    "sev_low_bg": "#ECFEFF",
+    "sev_low_fg": "#0E7490",
+    "sev_info_bg": "#F5F3FF",
+    "sev_info_fg": "#6D28D9",
     "radius_sm": _R["sm"],
     "radius_md": _R["md"],
     "radius_lg": _R["lg"],
     "radius_pill": _R["pill"],
     "body_size": _TY["body"]["fontSize"],
+    "title_size": _TY["title"]["fontSize"],
     "heading_size": _TY["heading"]["fontSize"],
     "display_size": _TY["display"]["fontSize"],
     "stat_value_size": _TY["stat-value"]["fontSize"],
@@ -138,7 +166,7 @@ QFrame#GradientHeader {
 }
 QLabel#HeaderTitle {
     color: $on_primary;
-    font-size: $heading_size;
+    font-size: $title_size;
     font-weight: 700;
 }
 QLabel#HeaderBreadcrumb {
@@ -295,7 +323,6 @@ QLabel#StatCaption {
     color: $secondary;
     font-size: $caption_size;
     font-weight: 600;
-    letter-spacing: 1px;
 }
 
 /* ==== queue strip ================================================= */
@@ -308,7 +335,6 @@ QLabel#QueueCaption {
     color: $secondary;
     font-size: $label_caps_size;
     font-weight: 600;
-    letter-spacing: 1px;
 }
 QLabel#QueueLabel {
     color: $secondary;
@@ -358,6 +384,28 @@ QTextEdit#ConsoleLog {
     padding: 8px;
 }
 
+/* ==== status pills ================================================ */
+QLabel#status_ok { background: $status_ok_bg; color: $status_ok_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#status_warn { background: $status_warn_bg; color: $status_warn_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#status_fail { background: $status_fail_bg; color: $status_fail_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#status_cancelled { background: $status_cancelled_bg; color: $status_cancelled_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+
+/* ==== severity badges ============================================= */
+QLabel#sev_critical { background: $sev_critical_bg; color: $sev_critical_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#sev_high { background: $sev_high_bg; color: $sev_high_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#sev_medium { background: $sev_medium_bg; color: $sev_medium_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#sev_low { background: $sev_low_bg; color: $sev_low_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+QLabel#sev_info { background: $sev_info_bg; color: $sev_info_fg;
+    border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+
 /* ==== menus (force light; avoid dark-mode bleed) ================== */
 QMenuBar, QMenu {
     background: $surface;
@@ -369,7 +417,42 @@ QToolTip { background: $surface; color: $display_value; border: 1px solid $borde
 
 STYLESHEET: str = Template(_QSS).substitute(_T)
 
+# -- runtime header-dot colors ----------------------------------------------
+# `MainWindow.set_status(status, color)` recolors the header status dot at
+# runtime; these are the colors the controller passes. `ok` is DESIGN.md's
+# `status-dot` (#86EFAC). `warn` (#fbbf24) and `fail` (#f87171) are the two
+# runtime-only amber/red dots — DESIGN.md names status-* *pills* but no tokens
+# for these dot shades, so they are recorded here (values unchanged from the
+# previous literals) rather than invented into the DESIGN.md palette.
+RUNTIME_STATUS: dict[str, str] = {
+    "ok": _C["status-dot"],
+    "warn": "#fbbf24",
+    "fail": "#f87171",
+}
+
 
 def apply(app) -> None:
     """Install :data:`STYLESHEET` on the running ``QApplication``."""
     app.setStyleSheet(STYLESHEET)
+
+
+def style_caps(label, *, px: int | None = None, weight: int | None = None) -> None:
+    """Apply the ``caption``/``label-caps`` letter-spacing to a label.
+
+    Qt Style Sheets have no ``letter-spacing`` property, so the tokens'
+    ``letterSpacing: 0.02em`` intent is honoured via ``QFont`` here instead of
+    dead CSS. ``QFont`` letter spacing survives QSS polish (verified). Defaults
+    come from the ``caption`` token; pass ``px=12, weight=600`` for
+    ``label-caps`` sizing.
+    """
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import QLabel
+
+    caps = _TY["caption"]
+    font = QFont(label.font() if isinstance(label, QLabel) else None)
+    font.setPixelSize(px if px is not None else int(caps["fontSize"].rstrip("px")))
+    font.setWeight(
+        QFont.Weight(weight if weight is not None else caps["fontWeight"])
+    )
+    font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 102)
+    label.setFont(font)

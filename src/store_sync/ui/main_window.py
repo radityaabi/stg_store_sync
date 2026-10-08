@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from store_sync.ui import theme
 from store_sync.ui.dashboard import Dashboard
 from store_sync.ui.job_detail import JobDetail
 from store_sync.ui.run_detail import RunDetail
@@ -145,7 +146,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.run_detail)
 
     # -- app API -----------------------------------------------------------
-    def set_status(self, status: str, color: str = "#86efac") -> None:
+    def set_status(self, status: str, color: str = theme.RUNTIME_STATUS["ok"]) -> None:
         self.status_label.setText(f"{ICON} {status}")
         # Runtime status color: the only sanctioned inline style — every other
         # cosmetic comes from the shared theme.STYLESHEET.

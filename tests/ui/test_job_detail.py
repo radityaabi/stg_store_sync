@@ -129,7 +129,7 @@ def test_rail_buttons_carry_design_icons_and_object_names():
     assert d.back_button.text().startswith("←")
     assert d.preflight_button.text().startswith("✔")
     assert d.preflight_button.objectName() == "btn_warning"
-    assert d.approve_button.text().startswith("▶️")
+    assert d.approve_button.text().startswith("▶")
     assert d.approve_button.objectName() == "btn_success"
     assert d.save_button.text().startswith("💾")
     assert d.save_button.objectName() == "btn_primary"
