@@ -122,6 +122,14 @@ class TestStores:
         _, url, *_ = s.calls[0]
         assert _path(url) == "/api/SubjectStores/GetStoreUsage/13471"
 
+    def test_get_survey_xml(self, client_and_session):
+        c, s = client_and_session
+        s._responses = [FakeResponse(200, None, text="<Survey/>")]
+        assert c.get_survey_xml("SURV") == "<Survey/>"
+        _, url, params, auth, headers, timeout = s.calls[0]
+        assert _path(url) == "/api/Surveys/GetSurveyXML/SURV"
+        assert headers["Accept"] == "text/xml"
+
 
 class TestSurveyInterviewIDs:
     def test_builds_params_and_returns_ids(self, client_and_session):

@@ -129,6 +129,19 @@ class STGClient:
         data = self._get(f"/SubjectStores/GetStoreUsage/{store_id}")
         return self._as_list(data)
 
+    def get_survey_xml(self, survey_id: str, *, timeout: int = 180) -> str:
+        """Return the survey definition XML (used to derive pull terms)."""
+        r = self.session.get(
+            self._url(f"/Surveys/GetSurveyXML/{survey_id}"),
+            params=None,
+            auth=self.auth,
+            headers={"Accept": "text/xml"},
+            timeout=timeout,
+        )
+        if r.status_code >= 400:
+            raise STGError(f"HTTP {r.status_code}: {r.text[:300]}")
+        return r.text
+
     # -- survey pull -------------------------------------------------------
 
     def survey_interview_ids(
