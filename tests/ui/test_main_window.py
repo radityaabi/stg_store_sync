@@ -94,3 +94,13 @@ def test_close_event_calls_stop_owned_threads():
     w._stop_owned_threads = lambda: calls.append(True)
     w.close()
     assert calls == [True]
+
+
+def test_header_object_names_and_status_recolor():
+    w = MainWindow()
+    assert w.breadcrumb_label.objectName() == "HeaderBreadcrumb"
+    assert w.status_label.objectName() == "HeaderStatus"
+    w.set_status("running x", "#fbbf24")
+    assert "running x" in w.status_label.text()
+    assert "#fbbf24" in w.status_label.styleSheet()
+    w.close()

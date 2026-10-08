@@ -122,3 +122,29 @@ def test_config_fields_tolerates_whitespace():
     d.window_days_edit.setText("  ")
     assert d.config_fields()["store_id"] == 0
     assert d.config_fields()["window_days"] == 0
+
+
+def test_rail_buttons_carry_design_icons_and_object_names():
+    d = JobDetail()
+    assert d.back_button.text().startswith("←")
+    assert d.preflight_button.text().startswith("✔")
+    assert d.preflight_button.objectName() == "btn_warning"
+    assert d.approve_button.text().startswith("▶️")
+    assert d.approve_button.objectName() == "btn_success"
+    assert d.save_button.text().startswith("💾")
+    assert d.save_button.objectName() == "btn_primary"
+    assert d.run_button.text().startswith("▶")
+    assert d.run_button.objectName() == "btn_primary"
+    assert d.stop_button.text().startswith("⏹")
+    assert d.stop_button.objectName() == "btn_danger"
+
+
+def test_column_buttons_carry_design_icons_and_object_names():
+    d = JobDetail()
+    assert d.add_column_button.text().startswith("➕")
+    assert d.add_column_button.objectName() == "btn_primary"
+    assert d.remove_column_button.text().startswith("🗑")
+    assert d.remove_column_button.objectName() == "btn_danger"
+    assert d.import_button.text().startswith("📥")
+    assert d.export_button.text().startswith("📤")
+    assert d.schedule_preview.objectName() == "SchedulePreview"

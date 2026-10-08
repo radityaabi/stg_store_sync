@@ -46,13 +46,9 @@ class RunDetail(QWidget):
     def _summary(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("RunSummary")
-        frame.setStyleSheet(
-            "QFrame#RunSummary { background:#F8F9FA; border-bottom:1px solid #E5E7EB; }"
-        )
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(14, 12, 14, 12)
         self.summary_label = QLabel("no run selected")
-        self.summary_label.setStyleSheet("font-weight:600; color:#111827;")
         lay.addWidget(self.summary_label)
         lay.addStretch(1)
         return frame
@@ -83,10 +79,8 @@ class RunDetail(QWidget):
         lay.setSpacing(6)
         lay.addWidget(QLabel("Log"))
         self.log_view = QTextEdit()
+        self.log_view.setObjectName("ConsoleLog")
         self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet(
-            "background:#0f172a; color:#e2e8f0; font-family:monospace;"
-        )
         self.log_view.setMinimumHeight(120)
         lay.addWidget(self.log_view)
         return w
@@ -94,9 +88,6 @@ class RunDetail(QWidget):
     def _action_rail(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("ActionRail")
-        frame.setStyleSheet(
-            "QFrame#ActionRail { background:#F8F9FA; border-top:1px solid #E5E7EB; }"
-        )
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(14, 10, 14, 10)
         self.back_button = QPushButton("← Back")

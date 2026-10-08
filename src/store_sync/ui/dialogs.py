@@ -91,10 +91,11 @@ class JobDialog(QDialog):
         self.binding_view.setSelectionMode(QAbstractItemView.SingleSelection)
         self.binding_view.verticalHeader().setVisible(False)
         self.binding_view.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.binding_view.setAlternatingRowColors(True)
         root.addWidget(self.binding_view)
 
         buttons = QDialogButtonBox()
-        self.ok_button = QPushButton("Save")
+        self.ok_button = QPushButton("💾 Save")
         self.ok_button.setObjectName("btn_primary")
         self.ok_button.clicked.connect(self.accept)
         self.cancel_button = QPushButton("Cancel")

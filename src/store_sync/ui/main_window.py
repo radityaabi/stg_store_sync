@@ -89,20 +89,16 @@ class MainWindow(QMainWindow):
     def _header(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("GradientHeader")
-        frame.setStyleSheet(
-            "#GradientHeader { background: qlineargradient("
-            "x1:0, y1:0, x2:1, y2:1, stop:0 #667eea, stop:1 #764ba2); }"
-        )
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(18, 14, 18, 14)
         lay.setSpacing(12)
 
         title = QLabel(_TITLE)
-        title.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
+        title.setObjectName("HeaderTitle")
         self.breadcrumb_label = QLabel("Dashboard")
-        self.breadcrumb_label.setStyleSheet("color: #e2e8f0; font-weight: 500;")
+        self.breadcrumb_label.setObjectName("HeaderBreadcrumb")
         self.status_label = QLabel(f"{ICON} ready")
-        self.status_label.setStyleSheet("color: #86efac; font-weight: 600;")
+        self.status_label.setObjectName("HeaderStatus")
 
         lay.addWidget(title)
         lay.addWidget(self.breadcrumb_label)
@@ -151,6 +147,8 @@ class MainWindow(QMainWindow):
     # -- app API -----------------------------------------------------------
     def set_status(self, status: str, color: str = "#86efac") -> None:
         self.status_label.setText(f"{ICON} {status}")
+        # Runtime status color: the only sanctioned inline style — every other
+        # cosmetic comes from the shared theme.STYLESHEET.
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
     # -- slots -------------------------------------------------------------

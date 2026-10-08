@@ -521,7 +521,10 @@ class Controller:
 def main() -> int:
     from PySide6.QtWidgets import QApplication
 
+    from store_sync.ui import theme
+
     app = QApplication.instance() or QApplication(sys.argv)
+    theme.apply(app)
     window = MainWindow()
     controller = Controller(window)
     controller.start()

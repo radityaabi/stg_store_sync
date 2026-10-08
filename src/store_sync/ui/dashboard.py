@@ -68,22 +68,13 @@ class Dashboard(QWidget):
     def _stat_card(self, key: str, label: str) -> QWidget:
         frame = QFrame()
         frame.setObjectName("StatCard")
-        frame.setStyleSheet(
-            "QFrame#StatCard { background:#ffffff; border:1px solid #E5E7EB;"
-            " border-radius:8px; }"
-        )
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(2)
         value = QLabel("0")
-        value.setStyleSheet(
-            "color:#111827; font-size:24px; font-weight:700; border:none;"
-        )
+        value.setObjectName("StatValue")
         caption = QLabel(label.upper())
-        caption.setStyleSheet(
-            "color:#6B7280; font-size:11px; font-weight:600; letter-spacing:1px;"
-            " border:none;"
-        )
+        caption.setObjectName("StatCaption")
         lay.addWidget(value)
         lay.addWidget(caption)
         self._stat_labels[key] = value
@@ -92,19 +83,12 @@ class Dashboard(QWidget):
     def _queue_strip(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("QueueStrip")
-        frame.setStyleSheet(
-            "QFrame#QueueStrip { background:#F8F9FA; border:1px solid #E5E7EB;"
-            " border-radius:8px; }"
-        )
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(12, 8, 12, 8)
         caption = QLabel("QUEUE")
-        caption.setStyleSheet(
-            "color:#6B7280; font-size:11px; font-weight:600; letter-spacing:1px;"
-            " border:none;"
-        )
+        caption.setObjectName("QueueCaption")
         self.queue_label = QLabel("idle")
-        self.queue_label.setStyleSheet("color:#1F2937; border:none;")
+        self.queue_label.setObjectName("QueueLabel")
         lay.addWidget(caption)
         lay.addSpacing(8)
         lay.addWidget(self.queue_label, stretch=1)
@@ -121,12 +105,15 @@ class Dashboard(QWidget):
         new_btn.clicked.connect(self.new_requested.emit)
 
         run_btn = QPushButton("▶ Run now")
+        run_btn.setObjectName("btn_primary")
         run_btn.clicked.connect(self._on_run)
         stop_btn = QPushButton("⏹ Stop")
+        stop_btn.setObjectName("btn_danger")
         stop_btn.clicked.connect(self.stop_requested.emit)
         edit_btn = QPushButton("✏ Edit")
         edit_btn.clicked.connect(self._on_edit)
         delete_btn = QPushButton("🗑 Delete")
+        delete_btn.setObjectName("btn_danger")
         delete_btn.clicked.connect(self._on_delete)
 
         schedules_btn = QPushButton("⏰ Schedules")
@@ -154,20 +141,35 @@ class Dashboard(QWidget):
         return w
 
     def _table(self) -> QWidget:
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+
         self.model = JobListModel(self)
         self.table = QTableView()
+        self.table.setObjectName("StoreTable")
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.doubleClicked.connect(self._on_double_click)
-        return self.table
+        lay.addWidget(self.table, stretch=1)
+
+        self.empty_label = QLabel("No stores registered yet — click ➕ New")
+        self.empty_label.setObjectName("EmptyState")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setVisible(False)
+        lay.addWidget(self.empty_label)
+        return host
 
     # -- app API -----------------------------------------------------------
     def set_entries(self, entries: list[JobEntry]) -> None:
         self.model.set_entries(entries)
+        self.empty_label.setVisible(self.model.rowCount() == 0)
 
     def set_queue(self, active: str | None, pending: list[str]) -> None:
         parts: list[str] = []

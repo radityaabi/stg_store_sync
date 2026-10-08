@@ -5,6 +5,10 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
 from store_sync.core.config import ColumnBinding
+from store_sync.ui import theme
+
+# Derived/read-only pull-term text is muted to the DESIGN.md `secondary` token.
+_MUTED = QColor(theme.TOKENS["colors"]["secondary"])
 
 
 class JobTableModel(QAbstractTableModel):
@@ -47,7 +51,7 @@ class JobTableModel(QAbstractTableModel):
             if c == 3:
                 return col.kind
         if role == Qt.ForegroundRole and c == 2:
-            return QColor("#64748b")  # muted: derived/read-only
+            return _MUTED  # derived/read-only
         return None
 
     def flags(self, index):

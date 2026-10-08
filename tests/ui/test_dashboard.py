@@ -76,3 +76,29 @@ def test_plain_signals_emit():
     d.refresh_button.click()
     assert seen == ["new", "stop", "sched", "refresh"]
 
+
+def test_buttons_carry_design_icons_and_object_names():
+    d = Dashboard()
+    assert d.new_button.text().startswith("➕")
+    assert d.new_button.objectName() == "btn_primary"
+    assert d.run_button.text().startswith("▶")
+    assert d.run_button.objectName() == "btn_primary"
+    assert d.stop_button.text().startswith("⏹")
+    assert d.stop_button.objectName() == "btn_danger"
+    assert d.edit_button.text().startswith("✏")
+    assert d.delete_button.text().startswith("🗑")
+    assert d.delete_button.objectName() == "btn_danger"
+    assert d.schedules_button.text().startswith("⏰")
+    assert d.refresh_button.text().startswith("🔄")
+
+
+def test_empty_state_visible_only_without_rows():
+    d = Dashboard()
+    # Widget not shown; assert on the hidden flag, not isVisible().
+    assert d.empty_label.isHidden() is True  # before any entries
+    d.set_entries([])
+    assert d.empty_label.isHidden() is False
+    d.set_entries([E("a")])
+    assert d.empty_label.isHidden() is True
+
+

@@ -49,6 +49,13 @@ def test_run_detail_back_emits():
     assert seen == ["back"]
 
 
+def test_run_detail_uses_design_object_names():
+    d = RunDetail()
+    assert d.log_view.objectName() == "ConsoleLog"
+    assert d.back_button.text().startswith("←")
+    assert d.back_button.objectName() in ("", "btn_secondary")
+
+
 def test_run_detail_loads_tables():
     d = RunDetail()
     d.load(_run(errors=["boom", "bang"]),
@@ -154,3 +161,10 @@ def test_job_dialog_defaults():
     assert dlg.dry_run_check.isChecked() is True
     assert dlg.enabled is False
     assert dlg.binding_model.rowCount() == 0
+
+
+def test_job_dialog_button_design_icons():
+    dlg = JobDialog()
+    assert dlg.ok_button.text().startswith("💾")
+    assert dlg.ok_button.objectName() == "btn_primary"
+    assert dlg.cancel_button.text() == "Cancel"
