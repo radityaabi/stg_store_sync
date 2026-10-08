@@ -14,10 +14,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from store_sync.core.config import BindingConfig, ColumnBinding, JobConfig
+from store_sync.core.fetcher import parse_survey_index
 from store_sync.core.stg_client import STGClient
 from store_sync.core.state import State
-from store_sync.core.sync import run_sync
+from store_sync.core.sync import run_preflight, run_sync
 from store_sync.ui.main_window import MainWindow
+from store_sync.ui.mapping_io import export_template, parse_mapping
 
 
 def _data_dir() -> Path:
@@ -33,6 +35,9 @@ class Controller:
         self.window = window
         self.state = State(_data_dir() / "state.db")
         window.sync_requested.connect(self.run)
+        window.preflight_requested.connect(self.run_preflight)
+        window.import_mapping_requested.connect(self.import_mapping)
+        window.export_mapping_requested.connect(self.export_mapping)
 
     def _client(self) -> STGClient:
         import os
@@ -89,6 +94,79 @@ class Controller:
         )
         w.set_status(res.status if res.status != "ok" else "done",
                      "#86efac" if res.status in ("ok", "dry") else "#f87171")
+
+    def run_preflight(self) -> None:
+        w = self.window
+        try:
+            job = self._job_from_window()
+        except ValueError as e:
+            w.append_log(f"config error: {e}")
+            return
+        w.append_log("preflight start")
+        w.set_status("preflight", "#fbbf24")
+        try:
+            report, pull_terms = run_preflight(job, client=self._client())
+        except Exception as e:  # noqa: BLE001
+            w.set_status("error", "#f87171")
+            w.append_log(f"preflight error: {type(e).__name__}: {e}")
+            return
+
+        rows = [
+            {
+                "store_col": r.store_col,
+                "source_var": r.source_var,
+                "overlap": f"{r.overlap}/{r.total}",
+                "status": r.status,
+                "pull_term": pull_terms.get(r.source_var, ""),
+            }
+            for r in report.table
+        ]
+        w.set_preflight_rows(rows)
+        for e in report.errors:
+            w.append_log(f"  ! {e}")
+        w.set_status("preflight ok" if report.ok else "preflight blocked",
+                     "#86efac" if report.ok else "#f87171")
+
+    def export_mapping(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        w = self.window
+        path, _ = QFileDialog.getSaveFileName(w, "Save mapping template", "mapping.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            cols = [c.store_col for c in w.columns_model.columns()]
+            export_template(path, cols)
+            w.append_log(f"template written: {path}")
+        except Exception as e:  # noqa: BLE001
+            w.append_log(f"export error: {e}")
+
+    def import_mapping(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        w = self.window
+        path, _ = QFileDialog.getOpenFileName(w, "Open mapping", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            job = self._job_from_window()
+            client = self._client()
+            store_cols = list({k for row in client.get_store(job.store.id) for k in row})
+            source_vars = sorted(parse_survey_index(
+                client.get_survey_xml(job.source.survey_id)
+            ).keys())
+            parsed, errors = parse_mapping(path, store_cols, source_vars)
+        except Exception as e:  # noqa: BLE001
+            w.append_log(f"import error: {type(e).__name__}: {e}")
+            return
+        if errors:
+            for e in errors:
+                w.append_log(f"  ! import rejected: {e}")
+            w.set_status("import rejected", "#f87171")
+            return
+        w.columns_model.set_columns(parsed)
+        w.append_log(f"imported {len(parsed)} column(s) from {path}")
+        w.set_status("binding changed", "#fbbf24")
 
 
 def main() -> int:

@@ -14,8 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from store_sync.core.config import JobConfig
-from store_sync.core.fetcher import parse_survey_index, pull
+from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
 from store_sync.core.planner import Plan, plan
+from store_sync.core.preflight import preflight
 from store_sync.core.writer import apply_plan
 
 
@@ -27,6 +28,45 @@ class SyncResult:
     counts: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     run_id: int | None = None
+
+
+def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
+    """Fetch a store snapshot + a small pull sample and run the binding gate.
+
+    Returns `(report, pull_terms)` where `pull_terms` maps `source_var → base`
+    for the GUI's read-only pull-term column.
+    """
+    index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
+    columns = config.binding.columns
+    terms, _ = derive_pull_terms(
+        [c.source_var for c in columns],
+        index,
+        match_var=config.binding.match.source_var if config.binding.match else None,
+    )
+    _ = terms  # terms reserved for the preflight review message
+
+    store_rows = client.get_store(config.store.id)
+    ids = client.survey_interview_ids(config.source.survey_id)[:sample_size]
+    pulled = pull(
+        client,
+        config.source.survey_id,
+        ids,
+        source_vars=[c.source_var for c in columns],
+        match_var=config.binding.match.source_var if config.binding.match else None,
+        survey_index=index,
+    )
+
+    report = preflight(
+        store_rows=store_rows,
+        source_records=pulled.records,
+        config=config,
+        client=client,
+        store_id=config.store.id,
+    )
+    pull_terms = {
+        c.source_var: index.get(c.source_var, "") for c in columns
+    }
+    return report, pull_terms
 
 
 def run_sync(

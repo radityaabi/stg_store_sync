@@ -131,6 +131,9 @@ class JobTableModel(QAbstractTableModel):
 
 class MainWindow(QWidget):
     sync_requested = Signal()
+    preflight_requested = Signal()
+    import_mapping_requested = Signal()
+    export_mapping_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -222,7 +225,9 @@ class MainWindow(QWidget):
         remove = QPushButton("Remove selected")
         remove.clicked.connect(self._on_remove_column)
         self.import_btn = QPushButton("Import mapping (.xlsx)")
+        self.import_btn.clicked.connect(self.import_mapping_requested.emit)
         self.export_btn = QPushButton("Export template (.xlsx)")
+        self.export_btn.clicked.connect(self.export_mapping_requested.emit)
         bar.addWidget(add)
         bar.addWidget(remove)
         bar.addStretch(1)
@@ -239,9 +244,12 @@ class MainWindow(QWidget):
         )
         self.preflight_view = _dict_view(self.preflight_model)
         lay.addWidget(self.preflight_view)
+        self.preflight_button = QPushButton("Run preflight")
+        self.preflight_button.clicked.connect(self.preflight_requested.emit)
         self.approve_button = QPushButton("Approve binding")
         self.approve_button.clicked.connect(self.mark_binding_approved)
         bar = QHBoxLayout()
+        bar.addWidget(self.preflight_button)
         bar.addStretch(1)
         bar.addWidget(self.approve_button)
         lay.addLayout(bar)
