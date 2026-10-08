@@ -33,7 +33,7 @@ class StoreConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "StoreConfig":
-        return cls(id=int(d["id"]), id_column=str(d.get("id_column", "")))
+        return cls(id=int(d.get("id", 0)), id_column=str(d.get("id_column", "")))
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "id_column": self.id_column}
@@ -48,7 +48,7 @@ class SourceConfig:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SourceConfig":
         return cls(
-            survey_id=str(d["survey_id"]),
+            survey_id=str(d.get("survey_id", "")),
             window_days=int(d.get("window_days", 0)),
             date_type=str(d.get("date_type", "Upload")),
         )

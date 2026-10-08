@@ -21,6 +21,7 @@ dev = ["pytest"]
 
 [project.scripts]
 stg-store-sync = "store_sync.gui:main"
+stg-store-sync-cli = "store_sync.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
