@@ -16,13 +16,24 @@ the STG REST API.
 
 ## Status
 
-Design phase. See:
+Phase 0 (de-risk probes against the live API) **complete** — write semantics
+verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not started.
 
 - Spec: `docs/superpowers/specs/2026-10-08-stg-store-sync-design.md`
 - Plan: `tasks/plan.md`
 - Todo: `tasks/todo.md`
+- Probe findings: `docs/probe/2026-10-08-fase0-findings.md`
 
-Phase 0 (de-risk probes against the live API) must complete before product code.
+### Key write-model facts (verified live)
+
+- A store has one **API id/tag column** (`No`, `uniqueID`, …) that keys
+  `UpdateRow`/`DeleteRow`; it is store-specific and must be declared per job.
+- `UpdateRow` is an **upsert** on that column and **must receive every column**
+  (omitted ones are reset). The id value is immutable.
+- `DeleteRow` takes the tag value as a **path** segment and always returns
+  `{Done: true}` — re-read the store to confirm.
+- `AddRow`/`UpdateRow` **cannot** create a column; columns must pre-exist in
+  STG Studio.
 
 ## Setup (once Phase 1 lands)
 

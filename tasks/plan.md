@@ -15,11 +15,16 @@ default.
 
 ## Architecture Decisions
 
-- **Identity = `SbjNum`**, per-interview, immutable once set; `No` is an order
-  tag (IsTag), never identity.
+- **Two columns, two roles** (probe F1/F2): the store's **API id/tag column**
+  (store-specific: `No`, `uniqueID`, …) keys `UpdateRow`/`DeleteRow` and is
+  immutable; the **match key** `SbjNum` (per-interview) is used for diffing.
 - **Lookup by key-set difference**, never by position.
-- **Binding gate**: store↔source names must match (`strict`) or be explicitly
-  approved (`mapped`); mismatch blocks the job.
+- **Binding gate**: alias pairs `{source_var → store_col}` approved by a human
+  (`mapped`, default); `strict` additionally requires `source == store`.
+- **Writes send the full row** — the API resets omitted columns (probe F2).
+- **`UpdateRow` is an upsert** on the id column; id value immutable.
+- **Columns must be pre-defined in Studio** — the API cannot add one (probe F3).
+- **`DeleteRow` always returns `{Done: true}`** — re-read to confirm (probe F4).
 - **Strict 100% value compare**; normalisation opt-in per column.
 - **Full sync**, `delete_policy=full_history` default; `dry_run=true` default.
 - **EAV flatten** of `/SimpleExport` into `{Var: Value}` per subject.
@@ -29,35 +34,20 @@ default.
 
 ## Task List
 
-### Phase 0: De-risk (blocks everything)
+### Phase 0: De-risk — ✅ COMPLETE
 
-- [ ] **Task 0.1: Confirm `UpdateRow` semantics**
-  - Description: Prove how `UpdateRow` selects a row and what it writes, using a
-    throwaway probe against the real server.
-  - Acceptance: A documented request/response showing which column(s) select the
-    row and that `No`/`SbjNum` are preserved.
-  - Verification: manual probe output committed to `docs/probe/`.
-  - Deps: None. Files: `/tmp` probe only. Scope: S.
+Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
-- [ ] **Task 0.2: Confirm `DeleteRow` semantics (`userTag`)**
-  - Description: Prove `DeleteRow` removes exactly one intended row and what
-    `userTag` maps to (`No`?).
-  - Acceptance: documented probe; before/after row counts.
-  - Deps: None. Scope: S.
-
-- [ ] **Task 0.3: Confirm a new column (`SbjNum`) can be added**
-  - Description: Determine whether `AddRow`/`UpdateRow` accept a genuinely new
-    column, or whether columns must be pre-defined in Studio.
-  - Acceptance: documented result; if pre-definition required, note the Studio step.
-  - Deps: None. Scope: S.
-
-- [ ] **Task 0.4: Remove dummy row `uniqueID=999999`**
-  - Description: Delete the probe row added earlier.
-  - Acceptance: `GetStore/17417` no longer contains `999999`; row count back to 295.
-  - Deps: 0.2. Scope: XS.
+- [x] **Task 0.1: Confirm `UpdateRow` semantics** — upsert on the store id
+  column; full-row payload; id value immutable.
+- [x] **Task 0.2: Confirm `DeleteRow` semantics** — `userTag` = id-column value,
+  passed as a **path** segment; always returns `{Done: true}`.
+- [x] **Task 0.3: New column via API?** — **no**; must be pre-defined in Studio.
+- [x] **Task 0.4: Remove dummy row `uniqueID=999999`** — done; 17417 back to 295.
+- [x] End-to-end add/update/delete cycle validated on `DUMMY_AUTO_STORE` (17620).
 
 ### Checkpoint: Phase 0
-- [ ] All four probes documented; unknowns in spec §10 answered
+- [x] All probes documented; spec §10 unknowns answered
 - [ ] Review with human before any product code
 
 ### Phase 1: Skeleton
@@ -86,22 +76,25 @@ default.
 
 ### Phase 2: Binding gate
 
-- [ ] **Task 2.1: `core/binding.py` — parity + key test**
-  - Description: `strict` name-parity check; auto-suggest store-col→source-var by
-    value overlap; key-validity test (reject non-unique candidates).
-  - Acceptance: `QRelID_RVid`-style non-unique candidate is rejected; `strict`
-    mismatch returns blocked with a reason.
+- [ ] **Task 2.1: `core/binding.py` — alias mapping + key/id verification**
+  - Description: `mapped` alias pairs `{source_var → store_col}`; `strict`
+    additionally requires `source == store`; auto-suggest store-col→source-var by
+    value overlap; match-key uniqueness test; **id-column verification** (probe
+    that `Store.id_column` behaves as the API key).
+  - Acceptance: a non-unique match key (e.g. `QRelID_RVid`, 248/296) is rejected;
+    `strict` mismatch is blocked with a reason; a wrong `id_column` is flagged.
   - Verification: `pytest tests/core/test_binding.py` (fixtures from real shapes).
   - Deps: 1.2, 1.3. Files: 2. Scope: M.
 
 - [ ] **Task 2.2: Preflight orchestration** — produce the review table
-  (store col, suggested var, overlap, status) from a live store + sample export.
+  (store col, suggested var, overlap, status) from a live store + sample export,
+  and confirm the declared id/tag column.
   - Acceptance: given the Link-1/`Gran_Turismo_Link2` shapes, the table matches
-    spec §5.2.
+    spec §5.2 and the id column is confirmed as `uniqueID`.
   - Deps: 2.1. Files: 1. Scope: S.
 
 ### Checkpoint: Binding
-- [ ] `strict` can block; `mapped` requires explicit approval; preflight table verified
+- [ ] alias pairs approved by a human; `strict` can block; id column verified; `mapped` requires explicit approval
 
 ### Phase 3: Data
 
@@ -111,8 +104,9 @@ default.
   - Verification: `pytest tests/core/test_fetcher.py`.
   - Deps: 1.3. Files: 2. Scope: M.
 
-- [ ] **Task 3.2: `core/planner.py`** — diff store vs source by identity key →
-  add/update/delete/conflicts; fail-closed rules (§4.3).
+- [ ] **Task 3.2: `core/planner.py`** — diff store vs source by **match key**
+  (`SbjNum`) → add/update/delete/conflicts; fail-closed rules (§4.4). Add assigns
+  `next_tag = max(id_column)+1`.
   - Acceptance: add/update/skip/delete classification proven; missing/dup key →
     conflict, no write.
   - Verification: `pytest tests/core/test_planner.py`.
@@ -134,9 +128,10 @@ default.
   - Deps: 2.1, 3.1, 4.1. Files: 2. Scope: M.
 
 - [ ] **Task 4.3: `core/writer.py`** — apply plan: `AddRow`/`UpdateRow`/`DeleteRow`,
-  throttle, retry, verify-before-add, identity never rewritten.
-  - Acceptance: idempotent update; add guarded; delete only per policy; identity
-    column untouched on update.
+  throttle, retry, **full-row payloads**, id column never rewritten, re-read after
+  deletes to confirm.
+  - Acceptance: update is an idempotent no-op when values match; add sends the
+    assigned tag; delete verified by re-read; id column untouched on update.
   - Verification: `pytest tests/core/test_writer.py` (mock transport).
   - Deps: 3.2, 4.1. Files: 2. Scope: M.
 
@@ -171,18 +166,20 @@ default.
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| `UpdateRow`/`DeleteRow` semantics unknown | High | Phase 0 gate before any writer code |
-| Store rejects new `SbjNum` column | High | Task 0.3 gate; fallback = Studio pre-define |
+| `UpdateRow`/`DeleteRow` semantics | Resolved | Fase 0 probe documented |
+| Store rejects new `SbjNum` column | Resolved | pre-define in Studio (§4.5) |
+| `UpdateRow` resets omitted columns | High | always send the full row |
+| Upsert on add → accidental insert | Medium | id value assigned `max+1` |
+| `DeleteRow` success on no-match | Medium | re-read store after deletes |
 | `full_history` delete removes legitimate rows | High | full-history window required; dry-run; confirm dialog; audit log |
-| `AddRow` not idempotent | High | verify key first; hash in state |
 | Strict 100% vs real data | Medium | report conflicts; opt-in normalisation |
 | 1 request/row × N | Medium | throttle + retry + resume |
 | Store LIVE ─ production writes | High | dry-run default; explicit confirm; audit |
-| Key drift | Medium | identity immutable; fail-closed |
+| Id column declared wrongly | Medium | preflight verifies it (Task 2.1) |
 
 ## Definition of Done
 
-- Phase 0 unknowns answered and documented.
+- Phase 0 unknowns answered and documented. ✅
 - `pytest` green across core modules.
 - Dry-run produces a correct plan for the real job.
 - One controlled real sync (add/update/delete) verified and audited.
@@ -191,4 +188,5 @@ default.
 
 ## Open Questions
 
-Carried from spec §10; Task 0.x closes them.
+- `full_history` window configuration per job (how far back is "full"?).
+- Is `SbjNum` ever absent from an interview export (helper/system subjects)?

@@ -43,15 +43,25 @@ Base URL `https://surveytogo.nielseniq.com/api`; **HTTP Basic** auth
 | Store usage | `GET /SubjectStores/GetStoreUsage/{storeID}` | array of `{SurveyID, Name}` |
 | Interview IDs | `GET /SurveyInterviewIDs?surveyIDs=&dateType=&dateStart=&dateEnd=&statuses=&orderBy=` | array or `{subjects:[...]}` |
 | Export answers | `GET /SimpleExport?surveyID=&subjectIDs=` | chunk ≤100 subjectIDs; EAV payload |
-| Add row | `POST /SubjectStores/AddRow/{storeID}?<col>=<val>&...` | returns `{"Done": true}` |
-| Update row | `POST /SubjectStores/UpdateRow/{storeID}?<col>=<val>&...` | **row selector not yet confirmed** |
-| Delete row | `POST /SubjectStores/DeleteRow/{storeID}?...` | params `storeID` + `userTag` (ref `Form1.cs:1037`) |
+| Add row | `POST /SubjectStores/AddRow/{storeID}?<col>=<val>&...` | insert; columns must be **pre-defined** |
+| Update row | `POST /SubjectStores/UpdateRow/{storeID}?<col>=<val>&...` | **UPSERT** on the store id column; full-row |
+| Delete row | `POST /SubjectStores/DeleteRow/{storeID}/{userTag}` | `userTag` = **value of the store id column** |
 | Delete all | `POST /SubjectStores/DeleteAllRows/{storeID}` | destructive |
 
 Parameter placement follows the reference testbed
 `src/knowledge/assets/STG_RESTAPI/Form1.cs`: a parameter is a **path segment**
 when `ParamsAsQueryString=false`, else a **query param** (`AllowQueryParam`).
-Observed: `AddRow` takes the columns as query params and the store id in the path.
+Observed: `AddRow`/`UpdateRow` take the columns as query params and the store id
+in the path; `DeleteRow` takes the tag **value as a path segment**.
+
+> **Probe-corrected (Fase 0).** The write semantics above were **verified live**;
+> see `docs/probe/2026-10-08-fase0-findings.md`. In summary: each store has one
+> designated **id/tag column** (`No` on the dummy store, `uniqueID` on
+> `Gran_Turismo_Link2`); `UpdateRow` is an **upsert** keyed on it (unseen value →
+> insert; the id value is immutable); updates **must send every column** or the
+> omitted ones are reset; `AddRow` **cannot** create a new column; `DeleteRow`
+> always returns `{Done: true}` (verify by re-reading); a `No`-less row gets tag
+> `0`, which is then unreachable by tag.
 
 ### 2.2 Export payload shape is EAV, not wide
 
@@ -87,6 +97,10 @@ Target store `Gran_Turismo_Link2` (id `17417`, v126, 295 rows):
 | `Q32` | `Q32` | a code | 295/295 |
 | `No` | *(not in source)* | row order tag | **store-only** |
 
+On this store the **API id/tag column is `uniqueID`** (probe F1) — `DeleteRow`
+with the `uniqueID` value removed a row, while `No` did not. This is **not
+universal**: the dummy store uses `No`. See §2.5 and `docs/probe/`.
+
 Link **2** (`ebf5e423-...`) writes the same store using vars `I7_1_2`, `I8a_1`,
 `Q32` — i.e. the **variable names are survey-specific and will differ** for the
 next survey. This is the central design hazard.
@@ -97,11 +111,14 @@ to the 295 store rows → **295/295 store rows found a source record**
 joined, ~109 matched all content columns byte-for-byte and the rest differed
 only in format (leading zero / spacing / truncated name) — never in identity.
 
-### 2.5 `No` is not auto-assigned
+### 2.5 The id/tag column is store-specific and is the API key
 
-`AddRow` with no `No` produced a row with `No: 0`. The server does **not**
-renumber. Operators therefore add a `No` column as an **order tag (IsTag)** so
-row order never shifts when rows are appended.
+Probe F1: each store designates one **id/tag column**. `UpdateRow` and
+`DeleteRow` key on it; other columns give `500 Error: id column data not found`
+(on a store whose id column is `No`) or silently no-op (on a store whose id
+column is `uniqueID`). `AddRow` without the id value produces tag `0` (probe F5),
+which is then unreachable by tag. So the job must **declare** the id column and
+preflight must **verify** it.
 
 ### 2.6 Pull-window trap (affects delete)
 
@@ -137,16 +154,20 @@ distinct = 296 ✅; **`QRelID_RVid` distinct = 248 ❌** (has duplicates);
 
 ## 4. Identity & Reconciliation Model
 
-### 4.1 Column roles are separated (never merged)
+### 4.1 Two distinct columns (roles must never be merged)
 
-| Role | Column | Set by | Mutable after set? |
-|---|---|---|---|
-| Order tag (IsTag) | `No` | **system** (`max(No)+1`) | yes (monotonic append) — **NOT identity** |
-| **Identity key** | `SbjNum` | source | **never** rewritten by the system |
-| Content | configured columns | source | yes |
+| Role | Column | Set by | Mutable? | Used by |
+|---|---|---|---|---|
+| **API id / tag** | store-specific (`No`, `uniqueID`, …) | system (add), **immutable** | no | keys `UpdateRow`/`DeleteRow` |
+| **Match key** | `SbjNum` (per-interview) | source (also written to store) | stable | diff (add vs update) |
+| Content | configured columns | source | yes | value compare |
 
-Semantics: **per-interview**. Each distinct `SbjNum` = one row. A re-interview
-of the same panelist is a **new row**.
+`No` is **not** automatically the id column — the id column is whatever the store
+designates (probe §F1). On `Gran_Turismo_Link2` it is `uniqueID`; on the dummy
+store it is `No`. The job **declares** the id column and preflight **verifies** it.
+
+Semantics: **per-interview**. Each distinct `SbjNum` = one row. A re-interview of
+the same panelist is a **new row**.
 
 ### 4.2 Lookup
 
@@ -155,41 +176,53 @@ pull all subjects           → source = { SbjNum: record }
 GET GetStore/{store_id}     → store rows
 index store by SbjNum       → store_by_key
 
-new      = source.keys ∖ store.keys                      → ADD    (No = max+1)
-changed  = keys ∩ , values differ                        → UPDATE (identity untouched)
+new      = source.keys ∖ store.keys                      → ADD    (tag = next_tag(store))
+changed  = keys ∩ , values differ                        → UPDATE (tag preserved)
 same     = keys ∩ , values equal                         → SKIP
 absent   = store.keys ∖ source.keys                      → DELETE (per policy §6)
 ```
 
 New rows are discovered **by key set difference**, never by position/timestamp.
+`next_tag(store)` = `max(id_column) + 1` over the numeric id values.
 
-### 4.3 Fail-closed rules
+### 4.3 Write mechanics (probe-verified)
+
+- **ADD** → `AddRow` with **all** columns incl. the assigned tag value.
+- **UPDATE** → `UpdateRow` with **all** columns; the id value must already exist
+  and is sent unchanged. Because the API upserts on the id column, an update can
+  never accidentally insert (the id value is present).
+- **DELETE** → `DeleteRow/{storeID}/{tag_value}`; then re-read to confirm.
+- A **new column** (e.g. `SbjNum`) must be **pre-defined in STG Studio** — the API
+  rejects unknown columns.
+
+### 4.4 Fail-closed rules
 
 ```
-SbjNum missing in a source record      → QUARANTINE that record (report), no write
-SbjNum duplicated within source        → CONFLICT, skip those rows, report
-SbjNum duplicated within store         → HALT the job, report
-Update NEVER writes the identity column
+match key missing in a source record    → QUARANTINE that record (report), no write
+match key duplicated within source      → CONFLICT, skip those rows, report
+match key duplicated within store       → HALT the job, report
+id/tag column missing in config         → preflight fails, job never writes
+Update NEVER writes the id/tag column to a new value
 All conflicts → `conflicts` table (SQLite); the run reports and stops
 ```
 
 Any candidate identity that fails uniqueness over the sample is **rejected
-automatically** by preflight (§7).
+automatically** by preflight (§5).
 
-### 4.4 Adoption of a legacy store
+### 4.5 Adoption of a legacy store
 
-The current store has **no `SbjNum` column** (`No`,`uniqueID`,`I7_1_2`,`I8a_1`,
-`Q32`). Before normal sync, a **one-time adoption** assigns identity:
+When the match column (`SbjNum`) does not yet exist on the target store:
 
 ```
-for each legacy store row:
-    find the source record matching on content columns
-    1:1 unique        → write its SbjNum via UpdateRow (once)
-    not unique / none → QUARANTINE, do not guess
-once every row has a unique SbjNum → normal sync
+[one-time, in Studio]  add the SbjNum column to the store
+[dry-run first]        for each legacy store row:
+                          find the source record matching on content columns
+                          1:1 unique        → write its SbjNum via UpdateRow (full payload)
+                          not unique / none → QUARANTINE, do not guess
+                       once every row has a unique SbjNum → normal sync
 ```
 
-Adoption is interactive + dry-run first; it is the highest-risk step and is not
+Adoption is interactive + dry-run first; it is the highest-risk step and is never
 run automatically.
 
 ---
@@ -201,11 +234,15 @@ survey.
 
 ### 5.1 Modes
 
-- **`strict`** — the set of store columns (minus `No` and the identity column)
-  must equal the set of source vars. If not → the job is **blocked** and never
-  writes.
-- **`mapped`** — the operator explicitly approves a per-column mapping
-  (required whenever names differ).
+- **`mapped`** (default) — the operator explicitly approves a per-column
+  `{source → store}` alias pair. Store names and source names commonly differ
+  (e.g. store `I7_1_2` ← source `T_QPM1_1`), so this is the normal case.
+- **`strict`** — `mapped` **plus** a check that every `source == store`. Used as a
+  safety net when a job happens to use identical names. A `strict` mismatch
+  **blocks** the job.
+
+Auto-mapping is never silent: preflight **suggests** an alias (highest
+value-overlap) but a human must approve it.
 
 ### 5.2 Preflight
 
@@ -214,12 +251,12 @@ Runs (once, and whenever the config changes) and produces a review table:
 | store col | suggested source var | value overlap | status |
 |---|---|---|---|
 | `uniqueID` | `T_QPM1_2` | 295/296 | ✅ |
-| `I7_1_2` | `T_QPM1_1` | 295/296 | ✅ |
+| `I7_1_2` | `T_QPM1_1` | 295/296 | ⚠️ format differs |
 | `I8a_1` | `T_QPM1_3` | 295/296 | ⚠️ format differs |
 | `Q32` | `Q32` | 295/295 | ✅ |
 
-Auto-suggestion is computed (highest value-overlap per store column) but is
-**only a suggestion** — a human approves. `strict` failures block the job.
+Preflight also **verifies the declared id/tag column** actually behaves as the
+store key (probe §F1) and validates the match key's uniqueness (§4.4).
 
 ### 5.3 Value comparison — strict 100%
 
@@ -245,8 +282,19 @@ zero) is **opt-in per column** and off by default. Known real differences:
   confirms.
 
 Write execution: **one request per row** (`AddRow`/`UpdateRow`/`DeleteRow`),
-throttled, with retry. `AddRow` is **not idempotent** → always verify key
-existence first. `UpdateRow` is naturally idempotent.
+throttled, with retry.
+
+Probe-corrected write rules (Fase 0):
+
+- Every write sends the **full row** (all columns) — the API resets omitted
+  columns.
+- The id/tag value is assigned on add (`max(id)+1`) and **never changed** on
+  update.
+- `UpdateRow` is an **upsert**; sending a full payload with an existing id value
+  is a safe idempotent no-op.
+- `AddRow`/`UpdateRow` return success but `DeleteRow` **always** returns
+  `{Done: true}`; after any delete, **re-read the store** to confirm.
+- `AddRow` cannot introduce columns; the match column must pre-exist (§4.5).
 
 ---
 
@@ -282,17 +330,17 @@ stg-store-sync/
 
 ```yaml
 job: gran_turismo_link1
-store:  { id: 17417, order_tag: "No" }
+store:  { id: 17417, id_column: "uniqueID" }   # API id/tag column (probe-verified)
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
           window_days: 0,          # 0 = full history
           date_type: Upload }      # Upload = server-arrival time
 binding:
-  mode: strict                     # strict | mapped
-  identity: { store_col: "SbjNum", source_var: "SbjNum" }
-  columns:
-    - { store_col: "I7_1_2", source_var: "T_QPM1_1" }
-    - { store_col: "I8a_1",  source_var: "T_QPM1_3" }
-    - { store_col: "Q32",    source_var: "Q32" }
+  mode: mapped                     # mapped | strict
+  match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key
+  columns:                         # source → store alias pairs
+    - { source_var: "T_QPM1_1", store_col: "I7_1_2", kind: text }
+    - { source_var: "T_QPM1_3", store_col: "I8a_1",  kind: text }
+    - { source_var: "Q32",      store_col: "Q32",    kind: text }
 write:
   op: full_sync                    # add + update + delete
   dry_run: true
@@ -309,10 +357,10 @@ write:
 [each Sync / tick]
   fetcher.pull(survey, window, dateType=Upload)
     └─ flatten EAV → per-subject {var: value}
-  binding.apply()                → {identity, columns, order_tag}
+  binding.apply()                → {id_column, match, columns}
   planner.diff(store_rows, records)
     └─ add / update / delete / conflicts
-  writer.apply()                 → POST SubjectStores/{AddRow|UpdateRow|DeleteRow}/...
+  writer.apply()                 → POST SubjectStores/{AddRow|UpdateRow}/... (+DeleteRow/{tag})
   state.record_run()             → log + hashes
 ```
 
@@ -330,28 +378,32 @@ write:
 
 | Risk | Level | Mitigation |
 |---|---|---|
-| `UpdateRow`/`DeleteRow` row-selector semantics unknown | High | Fase 0 blocks; probe first |
-| Store may not accept a new `SbjNum` column | High | Fase 0 probe |
+| `UpdateRow`/`DeleteRow` semantics | **Resolved** | Fase 0 probe; see `docs/probe/` |
+| New `SbjNum` column unsupported by API | **Resolved** | pre-define in Studio (§4.5) |
+| `UpdateRow` resets omitted columns | High | always send the **full** row (F2) |
+| Upsert on add → accidental insert | Medium | id value assigned `max+1`; add is a distinct call |
+| `DeleteRow` reports success on no-match | Medium | re-read the store after deletes (F4) |
 | `full_history` delete removes legitimate rows if window is short | High | require full-history window; dry-run; confirm dialog |
-| `AddRow` not idempotent → duplicates | High | check key first; hash in state |
 | Strict 100% vs real data (phones/truncation) | Medium | report as conflicts; opt-in normalisation |
 | 1 request/row × N rows | Medium | throttle + retry + resume |
 | Store LIVE ─ writes are production data | High | dry-run default; explicit confirm; audit log |
-| Key drift ("No replacing key") | Medium | identity immutable; fail-closed |
+| Id column declared wrongly | Medium | preflight verifies it against the live store (§5.2) |
 | Multiple links writing one store | Medium | filelock; run log |
 
 ---
 
 ## 9. Phases
 
-**Fase 0 — De-risk (blocks later phases)**
-- Confirm `UpdateRow` row selector + payload; confirm `DeleteRow` (`userTag` = `No`?).
-- Confirm the store accepts a new `SbjNum` column.
-- Confirm `No` convention on add.
-- Remove dummy row `uniqueID=999999`.
+**Fase 0 — De-risk — ✅ COMPLETE** (see `docs/probe/2026-10-08-fase0-findings.md`)
+- ✅ `UpdateRow` = upsert on the store's id column, full-row payload.
+- ✅ `DeleteRow userTag` = value of the store id column, in the **path**.
+- ✅ A new column **cannot** be added via the API — must be pre-defined in Studio.
+- ✅ `No` convention on add (`max+1`; `No`-less → `0`).
+- ✅ Dummy row `uniqueID=999999` removed from 17417 (back to 295 rows).
 
 **Fase 1 — Skeleton** — `pyproject`, `stg_client` (read+write, mock tests), `config`.
-**Fase 2 — Binding gate** — `binding.preflight` + key-validity test + approve dialog; block `strict` mismatch.
+**Fase 2 — Binding gate** — `binding.preflight` + id-column verify + match-key
+uniqueness test + approve dialog; `strict` mismatch blocks.
 **Fase 3 — Data** — `fetcher` + EAV flatten + `planner.diff`.
 **Fase 4 — Adoption + Write** — `SbjNum` adoption, `writer`, idempotency, `state`.
 **Fase 5 — GUI** — job config, preflight, Sync, dry-run, log.
@@ -361,7 +413,9 @@ write:
 
 ## 10. Open Questions
 
-1. Does the STG store accept a genuinely new column (`SbjNum`) via `AddRow`/`UpdateRow`, or must columns be pre-defined in Studio? (Fase 0)
-2. Exact `UpdateRow` row selector and `DeleteRow` `userTag` mapping. (Fase 0)
+1. ~~Does the store accept a genuinely new column via the API?~~ **Answered (F2/F3):**
+   no — columns must be pre-defined in Studio.
+2. ~~Exact `UpdateRow` selector and `DeleteRow` `userTag` mapping?~~ **Answered
+   (F1/F2):** upsert on the store's id column; `userTag` = its value, in the path.
 3. Confirm `full_history` window configuration per job (how far back is "full"?).
 4. Is `SbjNum` ever absent from an interview export (system/helper subjects)?
