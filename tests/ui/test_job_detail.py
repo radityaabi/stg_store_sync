@@ -73,15 +73,9 @@ def test_config_fields_round_trip():
     d = JobDetail()
     d.load(E(), a_job())
     assert d.config_fields() == {
-        "store_id": 17620,
-        "id_column": "No",
-        "survey_id": "SURV",
-        "match_source_var": "SbjNum",
-        "match_store_col": "SbjNum",
-        "window_days": 0,
-        "date_type": "Upload",
-        "delete_policy": "full_history",
-        "dry_run": True,
+        "store_id": 17620, "id_column": "No", "survey_id": "SURV",
+        "match_source_var": "SbjNum", "match_store_col": "SbjNum",
+        "delete_policy": "full_history", "dry_run": True,
     }
 
 
@@ -119,9 +113,9 @@ def test_config_fields_tolerates_whitespace():
     d = JobDetail()
     d.load(E(), a_job())
     d.store_id_edit.setText("   ")
-    d.window_days_edit.setText("  ")
     assert d.config_fields()["store_id"] == 0
-    assert d.config_fields()["window_days"] == 0
+    assert not hasattr(d, "window_days_edit")
+    assert not hasattr(d, "date_type_edit")
 
 
 def test_rail_buttons_carry_design_icons_and_object_names():

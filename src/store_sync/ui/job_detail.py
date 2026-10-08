@@ -103,15 +103,6 @@ class JobDetail(QWidget):
         row2.addWidget(self.match_store_edit)
         lay.addLayout(row2)
 
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Window days:"))
-        self.window_days_edit = QLineEdit()
-        row3.addWidget(self.window_days_edit)
-        row3.addWidget(QLabel("Date type:"))
-        self.date_type_edit = QLineEdit()
-        row3.addWidget(self.date_type_edit)
-        lay.addLayout(row3)
-
         row4 = QHBoxLayout()
         row4.addWidget(QLabel("Delete policy:"))
         self.delete_policy_combo = QComboBox()
@@ -247,8 +238,6 @@ class JobDetail(QWidget):
         self.match_store_edit.setText(
             (match.store_col if match else "") or (match.source_var if match else "")
         )
-        self.window_days_edit.setText(str(job.source.window_days))
-        self.date_type_edit.setText(job.source.date_type)
         idx = self.delete_policy_combo.findData(job.write.delete_policy)
         if idx >= 0:
             self.delete_policy_combo.setCurrentIndex(idx)
@@ -288,8 +277,6 @@ class JobDetail(QWidget):
             "survey_id": self.survey_id_edit.text().strip(),
             "match_source_var": self.match_var_edit.text().strip(),
             "match_store_col": self.match_store_edit.text().strip(),
-            "window_days": int(self.window_days_edit.text().strip() or 0),
-            "date_type": self.date_type_edit.text().strip(),
             "delete_policy": self.delete_policy_combo.currentData(),
             "dry_run": self.dry_run_check.isChecked(),
         }

@@ -102,7 +102,7 @@ def test_job_dialog_entry_fields():
 
 
 def a_job():
-    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV", 5, "Upload"),
+    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV"),
         BindingConfig(ColumnBinding("SbjNum", "SbjNum"),
             [ColumnBinding("T_QPM1_1", "I7_1_2")]), WriteConfig())
 
@@ -123,7 +123,6 @@ def test_job_dialog_edit_round_trip():
     assert dlg.survey_id_edit.text() == "SURV"
     assert dlg.match_var_edit.text() == "SbjNum"
     assert dlg.match_store_edit.text() == "SbjNum"
-    assert dlg.window_days_edit.text() == "5"
     assert dlg.schedule == "0 3 * * *"
     assert dlg.enabled is True
     assert dlg.binding_model.rowCount() == 1
@@ -155,8 +154,8 @@ def test_job_dialog_match_store_defaults_to_var():
 
 def test_job_dialog_defaults():
     dlg = JobDialog()
-    assert dlg.window_days_edit.text() == "0"
-    assert dlg.date_type_edit.text() == "Upload"
+    assert not hasattr(dlg, "window_days_edit")
+    assert not hasattr(dlg, "date_type_edit")
     assert dlg.delete_policy_combo.currentData() == "full_history"
     assert dlg.dry_run_check.isChecked() is True
     assert dlg.enabled is False

@@ -68,10 +68,6 @@ class JobDialog(QDialog):
         form.addRow("Match var", self.match_var_edit)
         self.match_store_edit = QLineEdit()
         form.addRow("Match store col", self.match_store_edit)
-        self.window_days_edit = QLineEdit("0")
-        form.addRow("Window days", self.window_days_edit)
-        self.date_type_edit = QLineEdit("Upload")
-        form.addRow("Date type", self.date_type_edit)
         self.delete_policy_combo = QComboBox()
         for label, value in DELETE_POLICIES:
             self.delete_policy_combo.addItem(label, value)
@@ -122,8 +118,6 @@ class JobDialog(QDialog):
             self.match_store_edit.setText(
                 match.store_col if match else ""
             )
-            self.window_days_edit.setText(str(job.source.window_days))
-            self.date_type_edit.setText(job.source.date_type)
             idx = self.delete_policy_combo.findData(job.write.delete_policy)
             if idx >= 0:
                 self.delete_policy_combo.setCurrentIndex(idx)
@@ -142,8 +136,6 @@ class JobDialog(QDialog):
             ),
             source=SourceConfig(
                 survey_id=self.survey_id_edit.text().strip(),
-                window_days=_int(self.window_days_edit.text()),
-                date_type=self.date_type_edit.text().strip(),
             ),
             binding=BindingConfig(
                 match=match,

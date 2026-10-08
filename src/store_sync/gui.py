@@ -550,9 +550,7 @@ class Controller:
         return JobConfig(
             job=self._detail_name or "",
             store=StoreConfig(fields["store_id"], fields["id_column"]),
-            source=SourceConfig(
-                fields["survey_id"], fields["window_days"], fields["date_type"]
-            ),
+            source=SourceConfig(fields["survey_id"]),
             binding=BindingConfig(
                 match=ColumnBinding(match_source, match_store),
                 columns=self.window.job_detail.bindings(),
