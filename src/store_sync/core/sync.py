@@ -15,7 +15,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from store_sync.core.binding import check_id_column, check_match_key
 from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
 from store_sync.core.planner import Plan, plan
@@ -33,24 +32,31 @@ def _window_start(window_days: int) -> str | None:
     return (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
 
 
-def _readiness_errors(config, store_rows) -> list[str]:
-    """Fail-closed preconditions: a usable store snapshot is mandatory.
+def _readiness_errors(config, store_rows, source_records) -> list[str]:
+    """Full preflight parity for the in-run fail-closed gate (spec §3.3/§4.4).
 
-    Without store rows we cannot learn the store's columns, so the declared id
-    column cannot be verified and the job must not write (spec §4.2.1/§4.4).
+    The CLI never calls `run_preflight` (that would double-fetch), so this gate
+    is its entire safety story. It must therefore evaluate the *same* error set
+    as `preflight`, reusing the already-fetched store snapshot and pulled source
+    records. `client=None` suppresses the write-probing no-op — this path must
+    never probe.
+
+    One deliberate exception: `preflight` also flags a match key non-unique *in
+    the pull*. Spec §3.2 says source-side duplicates are **skipped** (status
+    `partial`), not a hard halt, so that single message is excluded here; the
+    planner records those as source-side conflicts instead.
     """
-    if not store_rows:
-        return ["store has no rows (cannot learn its columns; refusing to write)"]
-    errs = []
-    idc = check_id_column(store_rows, config.store.id_column)
-    if not idc.exists:
-        errs.append(f"id column {config.store.id_column!r} not present on the store")
-    elif not idc.unique:
-        errs.append(f"id column {config.store.id_column!r} is not unique")
+    report = preflight(
+        store_rows=store_rows,
+        source_records=source_records,
+        config=config,
+        client=None,
+    )
     m = config.binding.match
-    if m and not check_match_key(store_rows, m.store_col).unique:
-        errs.append(f"match key {m.store_col!r} is not unique in the store")
-    return errs
+    source_dup = (
+        f"match key {m.source_var!r} is not unique in the pull" if m else None
+    )
+    return [e for e in report.errors if e != source_dup]
 
 
 @dataclass
@@ -168,7 +174,7 @@ def run_sync(
         # readiness preconditions (computed early; acted on before any write).
         # We defer the block until after conflict recording so the run log stays
         # complete for store-side duplicates the planner already flags.
-        readiness_errs = _readiness_errors(config, store_rows)
+        readiness_errs = _readiness_errors(config, store_rows, pulled.records)
 
         # 3) plan ------------------------------------------------------------
         tracked = state.tracked_keys(config.job)

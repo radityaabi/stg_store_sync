@@ -27,14 +27,24 @@ SURVEY_XML = """<?xml version="1.0"?>
 """
 
 
-def config(*, dry_run=True, id_column="No", delete_policy="full_history"):
+def config(
+    *,
+    dry_run=True,
+    id_column="No",
+    delete_policy="full_history",
+    mode="mapped",
+    columns=None,
+):
     return JobConfig(
         job="link1",
         store=StoreConfig(id=17620, id_column=id_column),
         source=SourceConfig(survey_id="SURV"),
         binding=BindingConfig(
+            mode=mode,
             match=ColumnBinding("SbjNum", "SbjNum"),
-            columns=[
+            columns=columns
+            if columns is not None
+            else [
                 ColumnBinding("T_QPM1_1", "I7_1_2"),
                 ColumnBinding("Q32", "Q32"),
             ],
@@ -246,3 +256,65 @@ class TestReadiness:
         c = FakeClient(store=[], subjects=subjects())
         res = run_sync(config(dry_run=False), client=c, state=st)
         assert res.status == "blocked"
+
+    def test_missing_store_column_blocks_before_write(self, st):
+        cfg = config(
+            dry_run=False,
+            columns=[
+                ColumnBinding("T_QPM1_1", "I7_1_2"),
+                ColumnBinding("Q32", "NOT_A_STORE_COL"),
+            ],
+        )
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status == "blocked"
+        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert any("not present on the store" in e for e in res.errors)
+
+    def test_missing_source_var_blocks_before_write(self, st):
+        cfg = config(
+            dry_run=False,
+            columns=[
+                ColumnBinding("T_QPM1_1", "I7_1_2"),
+                ColumnBinding("NOT_A_SOURCE_VAR", "Q32"),
+            ],
+        )
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status == "blocked"
+        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert any("not present in the pull" in e for e in res.errors)
+
+    def test_strict_violation_blocks_before_write(self, st):
+        # mapped names differ → strict mode reports every mismatch as an error
+        cfg = config(dry_run=False, mode="strict")
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status == "blocked"
+        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert any("strict" in e.lower() for e in res.errors)
+
+    def test_format_differs_still_runs(self, st):
+        # Only real errors gate — a per-column `format_differs` review status
+        # (leading-zero phone numbers) must NOT block the run.
+        rows = [
+            {"No": 1, "SbjNum": "101", "I7_1_2": "Alice", "Phone": "8151883872"},
+            {"No": 2, "SbjNum": "102", "I7_1_2": "Bob", "Phone": "8123456789"},
+        ]
+        subs = [
+            subj("1", [("SbjNum", 101), ("T_QPM1_1", "Alice"), ("PHONE", "08151883872")]),
+            subj("2", [("SbjNum", 102), ("T_QPM1_1", "Bob"), ("PHONE", "08123456789")]),
+        ]
+        cfg = config(
+            dry_run=True,
+            delete_policy="full_history",
+            columns=[
+                ColumnBinding("T_QPM1_1", "I7_1_2"),
+                ColumnBinding("PHONE", "Phone"),
+            ],
+        )
+        c = FakeClient(store=rows, subjects=subs)
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status != "blocked"
+        assert res.errors == []
+
