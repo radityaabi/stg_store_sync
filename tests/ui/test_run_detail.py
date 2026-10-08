@@ -167,6 +167,16 @@ def test_job_dialog_defaults():
     assert dlg.binding_model.rowCount() == 0
 
 
+def test_job_dialog_opens_usably_sized():
+    """The dialog must open large enough that no manual resize is needed."""
+    dlg = JobDialog()
+    assert dlg.size().width() >= 560
+    assert dlg.size().height() >= 480
+    assert dlg.minimumSize().width() >= 560
+    assert dlg.minimumSize().height() >= 480
+
+
+
 def test_job_dialog_button_design_icons():
     dlg = JobDialog()
     assert dlg.ok_button.text().startswith("💾")

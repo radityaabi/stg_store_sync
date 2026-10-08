@@ -102,6 +102,8 @@ class JobDialog(QDialog):
     def __init__(self, parent=None, *, entry=None, job=None):
         super().__init__(parent)
         self.setWindowTitle("Edit job" if entry is not None else "New job")
+        self.setMinimumSize(560, 480)
+        self.resize(640, 560)
         self._build_ui()
         if entry is not None or job is not None:
             self.load(entry, job)
