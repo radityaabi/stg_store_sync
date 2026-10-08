@@ -9,6 +9,7 @@ OK/Cancel buttons.
 """
 from __future__ import annotations
 
+from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,7 +20,9 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QTableView,
+    QTimeEdit,
     QVBoxLayout,
 )
 
@@ -27,9 +30,11 @@ from store_sync.core.config import (
     BindingConfig,
     ColumnBinding,
     JobConfig,
+    Schedule,
     SourceConfig,
     StoreConfig,
     WriteConfig,
+    human,
 )
 from store_sync.ui.job_table_model import JobTableModel
 from store_sync.ui.models import _DictTableModel
@@ -38,6 +43,24 @@ DELETE_POLICIES = [
     ("Full history", "full_history"),
     ("Tracked only", "tracked_only"),
     ("Manual", "manual"),
+]
+
+SCHEDULE_UNIT_ITEMS = [
+    ("Manual", ""),
+    ("Every minute", "minute"),
+    ("Every hour", "hour"),
+    ("Every day", "day"),
+    ("Every week", "week"),
+]
+
+WEEKDAY_ITEMS = [
+    ("Monday", 0),
+    ("Tuesday", 1),
+    ("Wednesday", 2),
+    ("Thursday", 3),
+    ("Friday", 4),
+    ("Saturday", 5),
+    ("Sunday", 6),
 ]
 
 
@@ -77,8 +100,21 @@ class JobDialog(QDialog):
         form.addRow("", self.dry_run_check)
         self.enabled_check = QCheckBox("Enabled")
         form.addRow("", self.enabled_check)
-        self.schedule_edit = QLineEdit()
-        form.addRow("Schedule (cron)", self.schedule_edit)
+        self.schedule_unit_combo = QComboBox()
+        for label, value in SCHEDULE_UNIT_ITEMS:
+            self.schedule_unit_combo.addItem(label, value)
+        form.addRow("Schedule", self.schedule_unit_combo)
+        self.schedule_every_spin = QSpinBox()
+        self.schedule_every_spin.setRange(1, 59)
+        form.addRow("Every N", self.schedule_every_spin)
+        self.schedule_at_edit = QTimeEdit()
+        self.schedule_at_edit.setTime(QTime(2, 0))
+        self.schedule_at_edit.setDisplayFormat("HH:mm")
+        form.addRow("At", self.schedule_at_edit)
+        self.schedule_weekday_combo = QComboBox()
+        for label, value in WEEKDAY_ITEMS:
+            self.schedule_weekday_combo.addItem(label, value)
+        form.addRow("Weekday", self.schedule_weekday_combo)
         root.addLayout(form)
 
         self.binding_model = JobTableModel(self)
@@ -106,7 +142,7 @@ class JobDialog(QDialog):
         """Pre-fill from an existing `JobEntry` (+ its `JobConfig`)."""
         if entry is not None:
             self.name_edit.setText(str(getattr(entry, "name", "") or ""))
-            self.schedule_edit.setText(str(getattr(entry, "schedule", "") or ""))
+            self._set_schedule(getattr(entry, "schedule", None) or Schedule())
             self.enabled_check.setChecked(bool(getattr(entry, "enabled", False)))
         if job is not None:
             self.name_edit.setText(job.job)
@@ -147,16 +183,32 @@ class JobDialog(QDialog):
             ),
         )
 
+    def schedule(self) -> Schedule:
+        """The structured schedule built from the four widgets."""
+        return Schedule(
+            unit=self.schedule_unit_combo.currentData() or "",
+            every=self.schedule_every_spin.value(),
+            at=self.schedule_at_edit.time().toString("HH:mm"),
+            weekday=self.schedule_weekday_combo.currentData() or 0,
+        )
+
+    def _set_schedule(self, schedule: Schedule) -> None:
+        idx = self.schedule_unit_combo.findData(schedule.unit)
+        if idx >= 0:
+            self.schedule_unit_combo.setCurrentIndex(idx)
+        self.schedule_every_spin.setValue(int(schedule.every))
+        at = QTime.fromString(schedule.at, "HH:mm") if schedule.at else None
+        self.schedule_at_edit.setTime(at if at and at.isValid() else QTime(2, 0))
+        widx = self.schedule_weekday_combo.findData(int(schedule.weekday))
+        if widx >= 0:
+            self.schedule_weekday_combo.setCurrentIndex(widx)
+
     def entry_fields(self) -> dict:
         return {
             "name": self.name_edit.text().strip(),
-            "schedule": self.schedule_edit.text().strip(),
+            "schedule": self.schedule(),
             "enabled": self.enabled_check.isChecked(),
         }
-
-    @property
-    def schedule(self) -> str:
-        return self.schedule_edit.text().strip()
 
     @property
     def enabled(self) -> bool:
@@ -174,12 +226,12 @@ class ScheduleOverview(QDialog):
     """Read-only overview of the registry's schedules.
 
     A minimal, honest surface for the dashboard's ⏰ Schedules button: it lists
-    every job's name, cron expression and enabled flag — no scheduling engine.
-    `rows()` exposes the same data for tests; `_DictTableModel` keeps the table
-    consistent with the rest of the app's read-only grid styling.
+    every job's name, human schedule label and enabled flag — no scheduling
+    engine. `rows()` exposes the same data for tests; `_DictTableModel` keeps
+    the table consistent with the rest of the app's read-only grid styling.
     """
 
-    _FIELDS = ["name", "cron", "enabled"]
+    _FIELDS = ["name", "schedule", "enabled"]
 
     def __init__(self, rows: list[dict], parent=None):
         super().__init__(parent)
@@ -195,7 +247,7 @@ class ScheduleOverview(QDialog):
             [
                 {
                     "name": r.get("name", ""),
-                    "cron": r.get("cron", "") or "(manual only)",
+                    "schedule": self._label(r.get("schedule")),
                     "enabled": "yes" if r.get("enabled") else "no",
                 }
                 for r in self._rows
@@ -216,5 +268,10 @@ class ScheduleOverview(QDialog):
         lay.addWidget(buttons)
 
     def rows(self) -> list[dict]:
-        """The raw schedule rows passed in (name · cron · enabled)."""
+        """The raw schedule rows passed in (name · schedule · enabled)."""
         return list(self._rows)
+
+    @staticmethod
+    def _label(schedule) -> str:
+        """`human(schedule)`; a non-`Schedule` value renders manual only."""
+        return human(schedule) if isinstance(schedule, Schedule) else "manual only"

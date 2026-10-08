@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from store_sync.core.config import human
 from store_sync.core.registry import JobEntry
 
 
@@ -41,7 +42,7 @@ class JobListModel(QAbstractTableModel):
         if col == 2:
             return e.survey_id
         if col == 3:
-            return e.schedule
+            return human(e.schedule)
         if col == 4:
             return "yes" if e.enabled else "no"
         if col == 5:

@@ -10,7 +10,7 @@ console-ish surfaces, colour-coded action-rail buttons.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -21,15 +21,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QTableView,
     QTabWidget,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from store_sync.core.config import ColumnBinding
+from store_sync.core.config import ColumnBinding, Schedule, human
 from store_sync.ui.job_table_model import JobTableModel
 from store_sync.ui.models import _DictTableModel
+from store_sync.ui.dialogs import SCHEDULE_UNIT_ITEMS, WEEKDAY_ITEMS
 
 DELETE_POLICIES = [
     ("Full history", "full_history"),
@@ -162,16 +165,41 @@ class JobDetail(QWidget):
         lay.addWidget(self.enabled_check)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Cron:"))
-        self.schedule_edit = QLineEdit()
-        row.addWidget(self.schedule_edit)
+        row.addWidget(QLabel("Schedule:"))
+        self.schedule_unit_combo = QComboBox()
+        for label, value in SCHEDULE_UNIT_ITEMS:
+            self.schedule_unit_combo.addItem(label, value)
+        row.addWidget(self.schedule_unit_combo)
+        row.addWidget(QLabel("Every:"))
+        self.schedule_every_spin = QSpinBox()
+        self.schedule_every_spin.setRange(1, 59)
+        row.addWidget(self.schedule_every_spin)
+        row.addWidget(QLabel("At:"))
+        self.schedule_at_edit = QTimeEdit()
+        self.schedule_at_edit.setTime(QTime(2, 0))
+        self.schedule_at_edit.setDisplayFormat("HH:mm")
+        row.addWidget(self.schedule_at_edit)
+        row.addWidget(QLabel("On:"))
+        self.schedule_weekday_combo = QComboBox()
+        for label, value in WEEKDAY_ITEMS:
+            self.schedule_weekday_combo.addItem(label, value)
+        row.addWidget(self.schedule_weekday_combo)
         lay.addLayout(row)
 
         self.schedule_preview = QLabel("")
         self.schedule_preview.setObjectName("SchedulePreview")
         lay.addWidget(self.schedule_preview)
         lay.addStretch(1)
-        self.schedule_edit.textChanged.connect(self._update_schedule_preview)
+        # Plain refresh on every widget change; Task 5 adds unit-based
+        # visibility toggling (at/weekday only for day/week).
+        self.schedule_unit_combo.currentIndexChanged.connect(
+            self._update_schedule_preview
+        )
+        self.schedule_every_spin.valueChanged.connect(self._update_schedule_preview)
+        self.schedule_at_edit.timeChanged.connect(self._update_schedule_preview)
+        self.schedule_weekday_combo.currentIndexChanged.connect(
+            self._update_schedule_preview
+        )
         return w
 
     def _history_tab(self) -> QWidget:
@@ -247,7 +275,7 @@ class JobDetail(QWidget):
         self.binding_model.set_columns(job.binding.columns)
 
         self.enabled_check.setChecked(bool(getattr(entry, "enabled", False)))
-        self.schedule_edit.setText(str(getattr(entry, "schedule", "") or ""))
+        self._set_schedule(getattr(entry, "schedule", None) or Schedule())
         self._update_schedule_preview()
 
     def bindings(self) -> list[ColumnBinding]:
@@ -282,9 +310,28 @@ class JobDetail(QWidget):
         }
 
     # -- slots -------------------------------------------------------------
-    def _update_schedule_preview(self) -> None:
-        text = self.schedule_edit.text().strip()
-        self.schedule_preview.setText(f"Runs: {text}" if text else "Runs: manual only")
+    def schedule(self) -> Schedule:
+        """The structured schedule built from the four widgets."""
+        return Schedule(
+            unit=self.schedule_unit_combo.currentData() or "",
+            every=self.schedule_every_spin.value(),
+            at=self.schedule_at_edit.time().toString("HH:mm"),
+            weekday=self.schedule_weekday_combo.currentData() or 0,
+        )
+
+    def _set_schedule(self, schedule: Schedule) -> None:
+        idx = self.schedule_unit_combo.findData(schedule.unit)
+        if idx >= 0:
+            self.schedule_unit_combo.setCurrentIndex(idx)
+        self.schedule_every_spin.setValue(int(schedule.every))
+        at = QTime.fromString(schedule.at, "HH:mm") if schedule.at else None
+        self.schedule_at_edit.setTime(at if at and at.isValid() else QTime(2, 0))
+        widx = self.schedule_weekday_combo.findData(int(schedule.weekday))
+        if widx >= 0:
+            self.schedule_weekday_combo.setCurrentIndex(widx)
+
+    def _update_schedule_preview(self, *args) -> None:
+        self.schedule_preview.setText(f"Runs: {human(self.schedule())}")
 
     def _on_add_column(self) -> None:
         self.binding_model.add_row()

@@ -1,9 +1,10 @@
 """Tests for run detail + job dialog (offscreen Qt)."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtCore import QTime
 from PySide6.QtWidgets import QApplication
 from store_sync.core.config import (BindingConfig, ColumnBinding, JobConfig,
-    SourceConfig, StoreConfig, WriteConfig)
+    Schedule, SourceConfig, StoreConfig, WriteConfig)
 from store_sync.core.registry import JobEntry
 from store_sync.ui.run_detail import RunDetail
 from store_sync.ui.dialogs import JobDialog
@@ -93,11 +94,15 @@ def test_run_detail_load_resets_tables():
 def test_job_dialog_entry_fields():
     dlg = JobDialog()
     dlg.name_edit.setText("a")
-    dlg.schedule_edit.setText("0 3 * * *")
+    dlg.schedule_unit_combo.setCurrentIndex(
+        dlg.schedule_unit_combo.findData("day")
+    )
+    dlg.schedule_every_spin.setValue(1)
+    dlg.schedule_at_edit.setTime(QTime(3, 0))
     dlg.enabled_check.setChecked(True)
     assert dlg.entry_fields() == {
-        "name": "a", "schedule": "0 3 * * *", "enabled": True}
-    assert dlg.schedule == "0 3 * * *"
+        "name": "a", "schedule": Schedule("day", 1, "03:00"), "enabled": True}
+    assert dlg.schedule() == Schedule("day", 1, "03:00")
     assert dlg.enabled is True
 
 
@@ -111,7 +116,7 @@ def an_entry():
     return JobEntry(name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
         delete_policy="full_history", dry_run=True,
-        enabled=True, schedule="0 3 * * *", column_count=1,
+        enabled=True, schedule=Schedule("day", 1, "03:00"), column_count=1,
         last_status=None, last_finished_at=None)
 
 
@@ -123,12 +128,12 @@ def test_job_dialog_edit_round_trip():
     assert dlg.survey_id_edit.text() == "SURV"
     assert dlg.match_var_edit.text() == "SbjNum"
     assert dlg.match_store_edit.text() == "SbjNum"
-    assert dlg.schedule == "0 3 * * *"
+    assert dlg.schedule() == Schedule("day", 1, "03:00")
     assert dlg.enabled is True
     assert dlg.binding_model.rowCount() == 1
     assert dlg.job() == a_job()
     assert dlg.entry_fields() == {
-        "name": "a", "schedule": "0 3 * * *", "enabled": True}
+        "name": "a", "schedule": Schedule("day", 1, "03:00"), "enabled": True}
 
 
 def distinct_match_job():
@@ -172,14 +177,18 @@ def test_job_dialog_button_design_icons():
 # -- ScheduleOverview --------------------------------------------------------
 
 def test_schedule_overview_rows_and_model():
+    from store_sync.core.config import human
     from store_sync.ui.dialogs import ScheduleOverview
 
-    dlg = ScheduleOverview([
-        {"name": "a", "cron": "0 3 * * *", "enabled": True},
-        {"name": "b", "cron": "", "enabled": False},
-    ])
+    rows = [
+        {"name": "a", "schedule": Schedule("day", 1, "03:00"), "enabled": True},
+        {"name": "b", "schedule": Schedule(""), "enabled": False},
+    ]
+    dlg = ScheduleOverview(rows)
     assert [r["name"] for r in dlg.rows()] == ["a", "b"]
     assert dlg.model.rowCount() == 2
     from PySide6.QtCore import Qt
     assert dlg.model.index(1, 2).data(Qt.DisplayRole) == "no"
+    assert dlg.model.index(0, 1).data(Qt.DisplayRole) == human(Schedule("day", 1, "03:00"))
+    assert dlg.model.index(1, 1).data(Qt.DisplayRole) == "manual only"
     assert dlg.close_button.text() == "Close"

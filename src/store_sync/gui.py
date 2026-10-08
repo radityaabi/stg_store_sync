@@ -32,9 +32,11 @@ from store_sync.core.config import (  # noqa: E402
     BindingConfig,
     ColumnBinding,
     JobConfig,
+    Schedule,
     SourceConfig,
     StoreConfig,
     WriteConfig,
+    human,
 )
 from store_sync.core.registry import Registry  # noqa: E402
 from store_sync.core.run_queue import RunQueue  # noqa: E402
@@ -304,7 +306,8 @@ class Controller:
     def run_now(self, name: str) -> None:
         self.queue.enqueue(name)
 
-    def save(self, name: str, job: JobConfig, *, schedule: str, enabled: bool) -> bool:
+    def save(self, name: str, job: JobConfig, *, schedule: Schedule,
+             enabled: bool) -> bool:
         """Persist `job` under `name` (add if new, else update) and refresh.
 
         Returns True on success; on a registry error it logs and returns False
@@ -458,7 +461,7 @@ class Controller:
         name = fields["name"]
         self._detail_name = name or None
         entry = types.SimpleNamespace(
-            name=name, schedule=fields["schedule"], enabled=fields["enabled"]
+            name=name, schedule=dlg.schedule(), enabled=fields["enabled"]
         )
         self.window.job_detail.load(entry, job)
         self._load_history(name)
@@ -523,7 +526,7 @@ class Controller:
     def _show_schedules(self) -> None:
         """Show a read-only overview of the registry's schedules."""
         rows = [
-            {"name": e.name, "cron": e.schedule, "enabled": bool(e.enabled)}
+            {"name": e.name, "schedule": e.schedule, "enabled": bool(e.enabled)}
             for e in self.list_entries()
         ]
         ScheduleOverview(rows, self.window).exec()
@@ -576,7 +579,7 @@ class Controller:
         if self.save(
             name,
             job,
-            schedule=detail.schedule_edit.text().strip(),
+            schedule=detail.schedule(),
             enabled=detail.enabled_check.isChecked(),
         ):
             self.window.set_status(f"saved {name}", _STATUS_OK)
@@ -599,7 +602,7 @@ class Controller:
         if self.save(
             name,
             job,
-            schedule=detail.schedule_edit.text().strip(),
+            schedule=detail.schedule(),
             enabled=detail.enabled_check.isChecked(),
         ):
             self.window.set_status(f"binding approved: {name}", _STATUS_OK)

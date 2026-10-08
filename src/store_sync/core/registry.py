@@ -20,9 +20,18 @@ from store_sync.core.config import (
     BindingConfig,
     ColumnBinding,
     JobConfig,
+    Schedule,
     SourceConfig,
     StoreConfig,
     WriteConfig,
+)
+
+_SCHEDULE_COLUMNS = (
+    # (column, DDL) — the structured per-list schedule (spec §4.5).
+    ("schedule_unit", "TEXT NOT NULL DEFAULT ''"),
+    ("schedule_every", "INTEGER NOT NULL DEFAULT 1"),
+    ("schedule_at", "TEXT NOT NULL DEFAULT ''"),
+    ("schedule_weekday", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 _SCHEMA = """
@@ -37,7 +46,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     delete_policy  TEXT NOT NULL DEFAULT 'full_history',
     dry_run        INTEGER NOT NULL DEFAULT 1,
     enabled        INTEGER NOT NULL DEFAULT 0,
-    schedule       TEXT NOT NULL DEFAULT '',
+    schedule_unit    TEXT NOT NULL DEFAULT '',
+    schedule_every   INTEGER NOT NULL DEFAULT 1,
+    schedule_at      TEXT NOT NULL DEFAULT '',
+    schedule_weekday INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -65,7 +77,7 @@ class JobEntry:
     delete_policy: str
     dry_run: bool
     enabled: bool
-    schedule: str
+    schedule: Schedule
     column_count: int
     last_status: str | None
     last_finished_at: str | None
@@ -74,7 +86,9 @@ class JobEntry:
 _ENTRY_FIELDS = """
 SELECT jobs.name, jobs.store_id, jobs.id_column, jobs.survey_id,
        jobs.match_source_var, jobs.match_store_col, jobs.delete_policy,
-       jobs.dry_run, jobs.enabled, jobs.schedule,
+       jobs.dry_run, jobs.enabled,
+       jobs.schedule_unit, jobs.schedule_every, jobs.schedule_at,
+       jobs.schedule_weekday,
        (SELECT COUNT(*) FROM job_columns c WHERE c.job_id = jobs.id) AS column_count,
 """
 
@@ -96,8 +110,24 @@ class Registry:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
-        self._drop_legacy_columns(("window_days", "date_type"))
+        self._add_schedule_columns()
+        self._drop_legacy_columns(("window_days", "date_type", "schedule"))
         self.conn.commit()
+
+    def _add_schedule_columns(self) -> None:
+        """Add the structured schedule columns when an older DB lacks them.
+
+        A legacy cron `schedule` TEXT column is dropped separately (below); a
+        cron job cannot be losslessly mapped to the interval model, so it
+        migrates to `unit=''` (manual only) — deliberate, documented (§4.5).
+        """
+        present = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(jobs)")
+        }
+        for col, ddl in _SCHEDULE_COLUMNS:
+            if col not in present:
+                self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
 
     def _drop_legacy_columns(self, columns: tuple[str, ...]) -> None:
         """Drop legacy `jobs` columns when present (SQLite ≥ 3.35)."""
@@ -147,7 +177,25 @@ class Registry:
         return row["id"]
 
     @staticmethod
+    def _schedule_values(schedule: Schedule) -> tuple[str, int, str, int]:
+        """Flatten a `Schedule` into the four stored columns (spec §4.5)."""
+        return (schedule.unit, int(schedule.every), schedule.at,
+                int(schedule.weekday))
+
+    @staticmethod
     def _entry(row: sqlite3.Row) -> JobEntry:
+        # Built with the dataclass constructor (DB columns are typed), not
+        # `from_dict` — a bad stored row must still yield a Schedule, never
+        # crash `list_entries`.
+        try:
+            schedule = Schedule(
+                unit=row["schedule_unit"],
+                every=row["schedule_every"],
+                at=row["schedule_at"],
+                weekday=row["schedule_weekday"],
+            )
+        except (TypeError, ValueError):
+            schedule = Schedule()
         return JobEntry(
             name=row["name"],
             store_id=row["store_id"],
@@ -158,7 +206,7 @@ class Registry:
             delete_policy=row["delete_policy"],
             dry_run=bool(row["dry_run"]),
             enabled=bool(row["enabled"]),
-            schedule=row["schedule"],
+            schedule=schedule,
             column_count=row["column_count"],
             last_status=row["last_status"],
             last_finished_at=row["last_finished_at"],
@@ -185,7 +233,8 @@ class Registry:
 
     # -- CRUD --------------------------------------------------------------
 
-    def add(self, job: JobConfig, *, schedule: str = "", enabled: bool = False) -> int:
+    def add(self, job: JobConfig, *, schedule: Schedule = Schedule(),
+            enabled: bool = False) -> int:
         """Insert a new job and its columns in one transaction. Returns job id."""
         values = self._config_values(job)
         try:
@@ -193,9 +242,11 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "delete_policy, dry_run, enabled, schedule) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (*values, int(bool(enabled)), str(schedule)),
+                    "delete_policy, dry_run, enabled, "
+                    "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (*values, int(bool(enabled)),
+                     *self._schedule_values(schedule)),
                 )
                 job_id = cur.lastrowid
                 self._replace_columns(job_id, job)
@@ -208,7 +259,7 @@ class Registry:
         name: str,
         job: JobConfig,
         *,
-        schedule: str | None = None,
+        schedule: Schedule | None = None,
         enabled: bool | None = None,
     ) -> None:
         """Replace the stored config + columns; touch only given toggles."""
@@ -222,8 +273,11 @@ class Registry:
         params = list(self._config_values(job)[1:])  # drop the old name slot
         params.append(job.job)
         if schedule is not None:
-            sets.append("schedule = ?")
-            params.append(str(schedule))
+            sets.append(
+                "schedule_unit = ?, schedule_every = ?, "
+                "schedule_at = ?, schedule_weekday = ?"
+            )
+            params.extend(self._schedule_values(schedule))
         if enabled is not None:
             sets.append("enabled = ?")
             params.append(int(bool(enabled)))
@@ -300,10 +354,12 @@ class Registry:
         )
         self.conn.commit()
 
-    def set_schedule(self, name: str, schedule: str) -> None:
+    def set_schedule(self, name: str, schedule: Schedule) -> None:
         job_id = self._job_id(name)
         self.conn.execute(
-            "UPDATE jobs SET schedule = ?, updated_at = datetime('now') WHERE id = ?",
-            (str(schedule), job_id),
+            "UPDATE jobs SET schedule_unit = ?, schedule_every = ?, "
+            "schedule_at = ?, schedule_weekday = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (*self._schedule_values(schedule), job_id),
         )
         self.conn.commit()

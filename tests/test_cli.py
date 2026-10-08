@@ -9,6 +9,7 @@ from store_sync.core.config import (
     BindingConfig,
     ColumnBinding,
     JobConfig,
+    Schedule,
     SourceConfig,
     StoreConfig,
     WriteConfig,
@@ -103,7 +104,7 @@ class TestExitCodes:
 class TestList:
     def test_list_subcommand(self, tmp_path, capsys, monkeypatch):
         db = tmp_path / "s.db"
-        add_job(db, "a", schedule="*/5 * * * *", enabled=True)
+        add_job(db, "a", schedule=Schedule("minute", 5), enabled=True)
         monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
         rc = main(["list"])
         out = capsys.readouterr().out

@@ -27,7 +27,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from filelock import FileLock, Timeout
 
-from store_sync.core.config import load_config
+from store_sync.core.config import human, load_config
 from store_sync.core.registry import Registry
 from store_sync.core.stg_client import STGClient
 from store_sync.core.state import State
@@ -150,7 +150,7 @@ def _cmd_list(db: Path, args) -> int:
     finally:
         reg.close()
     for e in entries:
-        schedule = e.schedule or "—"
+        schedule = human(e.schedule)
         state = "enabled" if e.enabled else "disabled"
         print(f"{e.name} · store {e.store_id} · {schedule} · {state}")
     return 0

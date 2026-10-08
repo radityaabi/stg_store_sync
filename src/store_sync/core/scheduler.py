@@ -1,16 +1,22 @@
-"""Scheduler — in-app minute-granular cron for enabled jobs (spec §7).
+"""Scheduler — in-app minute-granular scheduler for enabled jobs (spec §4).
 
-A tiny 5-field cron evaluator (``minute hour day-of-month month day-of-week``)
-plus a thin loop that, once per tick, enqueues every enabled job whose schedule
-is due and that has not already fired this minute. The Scheduler owns no thread:
-:meth:`Scheduler.tick` is a pure step (testable with a fake clock) and
-:meth:`Scheduler.run_forever` is the blocking driver the app runs on its own
-daemon thread.
+A structured :class:`store_sync.core.config.Schedule` evaluator (interval +
+anchor, spec §4.2) plus a thin loop that, once per tick, enqueues every enabled
+job whose schedule is due and that has not already fired this minute. The
+Scheduler owns no thread: :meth:`Scheduler.tick` is a pure step (testable with
+a fake clock) and :meth:`Scheduler.run_forever` is the blocking driver the app
+runs on its own daemon thread.
 
-Supported field syntax: ``*``, a single number, a range ``a-b``, a list
-``a,b``, and a step ``*/n`` (or ``a-b/n``). An empty schedule is never due.
-Day-of-week uses cron numbering where both ``0`` and ``7`` mean Sunday; it is
-mapped onto :meth:`datetime.weekday` (Monday=0).
+Due rules (spec §4.2):
+
+* ``minute``: ``now.minute % every == 0``
+* ``hour``: ``now.minute == 0 and now.hour % every == 0``
+* ``day``: at ``HH:MM`` and ``now.date().toordinal() % every == 0``
+* ``week``: on ``weekday`` at ``HH:MM`` and the ISO week index
+  ``year*53 + week`` satisfies ``% every == 0``
+
+An empty or malformed schedule (unknown unit, ``every <= 0``, bad ``at``) is
+never due.
 """
 from __future__ import annotations
 
@@ -19,65 +25,52 @@ import time
 from datetime import datetime
 from typing import Callable
 
+from store_sync.core.config import Schedule
+
 logger = logging.getLogger(__name__)
 
 
-def _parse_field(spec: str, lo: int, hi: int) -> set[int] | None:
-    """Expand one cron field into the set of matching ints, or None if bad."""
+def _parse_at(at: str) -> tuple[int, int] | None:
+    """Split an "HH:MM" anchor into (hour, minute), or None if malformed."""
     try:
-        allowed: set[int] = set()
-        for part in spec.split(","):
-            part = part.strip()
-            if part == "":
-                return None
-            step = 1
-            if "/" in part:
-                base, _, step_s = part.partition("/")
-                step = int(step_s)
-                if step <= 0:
-                    return None
-            else:
-                base = part
-            if base == "*":
-                start, end = lo, hi
-            elif "-" in base:
-                a_s, _, b_s = base.partition("-")
-                start, end = int(a_s), int(b_s)
-            else:
-                start = end = int(base)
-            if start < lo or end > hi or start > end:
-                return None
-            allowed.update(range(start, end + 1, step))
-    except (ValueError, TypeError):
+        h_s, m_s = at.strip().split(":")
+        hour, minute = int(h_s), int(m_s)
+    except (ValueError, AttributeError):
         return None
-    return allowed
+    if len(h_s) != 2 or len(m_s) != 2:  # zero-padded "HH:MM" only
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
 
 
-def is_due(schedule: str, now: datetime) -> bool:
-    """True if `schedule` (5-field cron) matches `now` to the minute."""
-    if not schedule or not schedule.strip():
+def is_due(schedule: Schedule, now: datetime) -> bool:
+    """True if `schedule` (interval + anchor, spec §4.2) matches `now`."""
+    if not isinstance(schedule, Schedule):
         return False
-    fields = schedule.split()
-    if len(fields) != 5:
+    every = schedule.every
+    if schedule.unit not in ("minute", "hour", "day", "week"):
         return False
-    # cron Sunday is 0 or 7; datetime.weekday() is Monday=0.
-    cron_dow = (now.weekday() + 1) % 7
-    specs = [
-        (fields[0], 0, 59, now.minute),
-        (fields[1], 0, 23, now.hour),
-        (fields[2], 1, 31, now.day),
-        (fields[3], 1, 12, now.month),
-        (fields[4], 0, 7, cron_dow),
-    ]
-    for spec, lo, hi, value in specs:
-        allowed = _parse_field(spec, lo, hi)
-        if allowed is None:
-            return False
-        if hi == 7 and 7 in allowed:  # day-of-week: normalize 7 -> 0 (Sun)
-            allowed = (allowed - {7}) | {0}
-        if value not in allowed:
-            return False
-    return True
+    if not isinstance(every, int) or every <= 0:
+        return False
+    if schedule.unit == "minute":
+        return now.minute % every == 0
+    if schedule.unit == "hour":
+        return now.minute == 0 and now.hour % every == 0
+    anchor = _parse_at(schedule.at)
+    if anchor is None:
+        return False
+    hour, minute = anchor
+    at_time = now.hour == hour and now.minute == minute
+    if not at_time:
+        return False
+    if schedule.unit == "day":
+        return now.date().toordinal() % every == 0
+    # week: weekday() is Monday=0, same numbering as Schedule.weekday.
+    if now.weekday() != schedule.weekday:
+        return False
+    iso = now.isocalendar()
+    return (iso[0] * 53 + iso[1]) % every == 0
 
 
 class Scheduler:
@@ -102,7 +95,7 @@ class Scheduler:
             if self._last.get(name) == minute_key:
                 continue
             try:
-                due = is_due(getattr(entry, "schedule", "") or "", now)
+                due = is_due(getattr(entry, "schedule", None), now)
             except Exception:
                 logger.exception("scheduler: bad schedule for %r; skipping", name)
                 continue

@@ -13,6 +13,7 @@ from store_sync.core.config import (  # noqa: E402
     BindingConfig,
     ColumnBinding,
     JobConfig,
+    Schedule,
     SourceConfig,
     StoreConfig,
     WriteConfig,
@@ -40,7 +41,7 @@ def a_job(name="a"):
 def test_save_lists_on_dashboard(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     assert c.list_entries()[0].name == "a"
     w.show_dashboard()
     assert w.dashboard.model.rowCount() == 1
@@ -54,7 +55,7 @@ def test_run_now_enqueues(tmp_path):
     c = Controller(
         w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: calls.append(name)
     )
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     c.start()
     c.run_now("a")
     time.sleep(0.2)
@@ -66,13 +67,13 @@ def test_run_now_enqueues(tmp_path):
 def test_save_twice_updates_not_duplicates(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     assert w.dashboard.model.rowCount() == 1
-    c.save("a", a_job(), schedule="0 * * * *", enabled=True)
+    c.save("a", a_job(), schedule=Schedule("hour", 1), enabled=True)
     assert len(c.list_entries()) == 1
     assert w.dashboard.model.rowCount() == 1
     entry = c.list_entries()[0]
-    assert entry.schedule == "0 * * * *"
+    assert entry.schedule == Schedule("hour", 1)
     assert entry.enabled is True
     c.stop()
     w.close()
@@ -81,7 +82,7 @@ def test_save_twice_updates_not_duplicates(tmp_path):
 def test_delete_removes_and_refreshes(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     assert w.dashboard.model.rowCount() == 1
     c.delete("a")
     assert c.list_entries() == []
@@ -110,7 +111,7 @@ def test_save_defaults_blank_match_store_col(tmp_path):
         BindingConfig(ColumnBinding("SbjNum", ""), base.binding.columns),
         base.write,
     )
-    c.save("a", blank, schedule="", enabled=False)
+    c.save("a", blank, schedule=Schedule(""), enabled=False)
     assert c.list_entries()[0].match_store_col == "SbjNum"
     c.stop()
     w.close()
@@ -126,7 +127,7 @@ def test_worker_thread_db_access(tmp_path):
         results.append(c.state.start_run(job=name, dry_run=True))
 
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=run_fn)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     c.start()
     c.run_now("a")
     deadline = time.monotonic() + 3
@@ -146,7 +147,7 @@ def test_registry_from_plain_thread(tmp_path):
     """`list_entries` from a non-GUI thread must not raise a thread error."""
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
 
     out = {}
 
@@ -193,7 +194,7 @@ def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
         name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
         delete_policy="full_history", dry_run=True,
-        enabled=False, schedule="", column_count=1, last_status=None,
+        enabled=False, schedule=Schedule(""), column_count=1, last_status=None,
         last_finished_at=None,
     )
     w.job_detail.load(entry, a_job())
@@ -246,7 +247,7 @@ def _seed_run(c, *, job="a", status="ok", counts=None, conflict=None):
 def test_open_job_fills_history_and_conflicts(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     _seed_run(c, conflict=("7", "duplicate key"))
     c._open_job("a")
     assert w.job_detail.history_model.rowCount() >= 1
@@ -260,7 +261,7 @@ def test_open_job_fills_history_and_conflicts(tmp_path):
 def test_open_job_without_runs_is_empty(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     c._open_job("a")
     assert w.job_detail.history_model.rowCount() == 0
     assert w.job_detail.conflicts_model.rowCount() == 0
@@ -271,7 +272,7 @@ def test_open_job_without_runs_is_empty(tmp_path):
 def test_activate_history_row_loads_run_detail(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     run_id = _seed_run(c, status="ok", counts={"add": 2},
                        conflict=("9", "dup"))
     c._open_job("a")
@@ -311,8 +312,8 @@ def test_main_window_relays_schedules_requested():
 def test_controller_show_schedules_builds_rows(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="0 3 * * *", enabled=True)
-    c.save("b", a_job("b"), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule("day", 1, "03:00"), enabled=True)
+    c.save("b", a_job("b"), schedule=Schedule(""), enabled=False)
     shown = {}
 
     class FakeOverview:
@@ -326,7 +327,7 @@ def test_controller_show_schedules_builds_rows(tmp_path, monkeypatch):
     c._show_schedules()  # must not raise
     rows = shown["rows"]
     assert len(rows) == 2
-    assert {"name", "cron", "enabled"} <= set(rows[0])
+    assert {"name", "schedule", "enabled"} <= set(rows[0])
     c.stop()
     w.close()
 
@@ -336,7 +337,7 @@ def test_controller_show_schedules_builds_rows(tmp_path, monkeypatch):
 def test_confirm_delete_cancel_keeps_job(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     monkeypatch.setattr(
         "store_sync.gui.QMessageBox.question",
         staticmethod(lambda *a, **k: QMessageBox.No),
@@ -350,7 +351,7 @@ def test_confirm_delete_cancel_keeps_job(tmp_path, monkeypatch):
 def test_confirm_delete_yes_removes_job(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule="", enabled=False)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     monkeypatch.setattr(
         "store_sync.gui.QMessageBox.question",
         staticmethod(lambda *a, **k: QMessageBox.Yes),
@@ -391,7 +392,7 @@ def _preflight_entry():
         name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
         delete_policy="full_history", dry_run=True,
-        enabled=False, schedule="", column_count=1, last_status=None,
+        enabled=False, schedule=Schedule(""), column_count=1, last_status=None,
         last_finished_at=None,
     )
 

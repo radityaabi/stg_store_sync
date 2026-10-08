@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from store_sync.core.config import (BindingConfig, ColumnBinding, JobConfig,
-    SourceConfig, StoreConfig, WriteConfig)
+    Schedule, SourceConfig, StoreConfig, WriteConfig)
 from store_sync.ui.job_detail import JobDetail
 
 _app = QApplication.instance() or QApplication([])
@@ -20,7 +20,7 @@ def b_job():
             [ColumnBinding("T_X", "X1")]), WriteConfig())
 
 class E:
-    name="a"; store_id=17620; survey_id="SURV"; schedule=""
+    name="a"; store_id=17620; survey_id="SURV"; schedule=Schedule("")
     enabled=False; last_status=None; last_finished_at=None; column_count=1
 
 def test_load_and_edit_binding():
@@ -116,6 +116,7 @@ def test_config_fields_tolerates_whitespace():
     assert d.config_fields()["store_id"] == 0
     assert not hasattr(d, "window_days_edit")
     assert not hasattr(d, "date_type_edit")
+    assert not hasattr(d, "schedule_edit")
 
 
 def test_rail_buttons_carry_design_icons_and_object_names():
@@ -142,6 +143,15 @@ def test_column_buttons_carry_design_icons_and_object_names():
     assert d.import_button.text().startswith("📥")
     assert d.export_button.text().startswith("📤")
     assert d.schedule_preview.objectName() == "SchedulePreview"
+
+
+def test_schedule_controls_round_trip():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("day"))
+    d.schedule_every_spin.setValue(3)
+    d.schedule_at_edit.setTime(__import__("PySide6.QtCore", fromlist=["QTime"]).QTime(2, 0))
+    assert d.schedule() == Schedule("day", 3, "02:00")
 
 
 def test_history_double_click_emits_run_activated():
