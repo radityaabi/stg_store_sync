@@ -1,0 +1,165 @@
+"""Planner: diff pulled records against store rows by match key.
+
+Produces a `Plan` of `Action`s (add / update / same / delete / conflict) plus
+quarantined records, following the fail-closed rules in spec §4.4 and the value
+rules in §5.3 (empty is a value; comparison is byte-for-byte after str()).
+
+Lookup is by key-set difference, never by position or timestamp (§4.2).
+"""
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass, field
+
+from store_sync.core.binding import project
+from store_sync.core.config import ColumnBinding
+
+
+@dataclass
+class Action:
+    kind: str  # "add" | "update" | "same" | "delete" | "conflict"
+    match_value: str
+    id_column: str = ""
+    id_value: object = None
+    payload: dict = field(default_factory=dict)
+    reason: str = ""
+
+
+@dataclass
+class Plan:
+    actions: list[Action] = field(default_factory=list)
+    quarantined: list[dict] = field(default_factory=list)
+    delete_candidates: list[str] = field(default_factory=list)
+    next_tag: int = 1
+
+    @property
+    def counts(self) -> dict[str, int]:
+        c = {"add": 0, "update": 0, "same": 0, "delete": 0, "conflict": 0}
+        for a in self.actions:
+            c[a.kind] = c.get(a.kind, 0) + 1
+        return c
+
+    @property
+    def blocked(self) -> bool:
+        """True when a conflict must halt the job (store-side duplicates)."""
+        return any(a.kind == "conflict" for a in self.actions)
+
+    @property
+    def ok(self) -> bool:
+        return not self.blocked
+
+
+def _s(value) -> str:
+    return "" if value is None else str(value)
+
+
+def _dups(values: list[str]) -> set[str]:
+    counts = Counter(values)
+    return {v for v, n in counts.items() if n > 1}
+
+
+def _next_tag(store_rows: list[dict], id_column: str) -> int:
+    nums = []
+    for r in store_rows:
+        v = r.get(id_column)
+        if v is None:
+            continue
+        sv = str(v)
+        if sv.isdigit():
+            nums.append(int(sv))
+    return (max(nums) + 1) if nums else 1
+
+
+def plan(
+    *,
+    store_rows: list[dict],
+    source_records: list[dict],
+    match: ColumnBinding,
+    columns: list[ColumnBinding],
+    id_column: str,
+    delete_policy: str = "full_history",
+    tracked: set[str] | None = None,
+) -> Plan:
+    """Classify every source record and store row into a write plan."""
+    p = Plan()
+    p.next_tag = _next_tag(store_rows, id_column)
+    tracked = {_s(t) for t in (tracked or set())}
+
+    # -- index the store by match key; duplicates are a hard conflict ---------
+    store_by_key: dict[str, dict] = {}
+    for row in store_rows:
+        if match.store_col not in row:
+            continue
+        key = _s(row.get(match.store_col))
+        store_by_key.setdefault(key, row)
+
+    store_keys = [_s(r.get(match.store_col)) for r in store_rows if match.store_col in r]
+    store_dups = _dups(store_keys)
+    for key in sorted(store_dups):
+        p.actions.append(
+            Action("conflict", key, id_column, reason="duplicate match key in store")
+        )
+
+    # -- index the source by match key ---------------------------------------
+    src_by_key: dict[str, dict] = {}
+    for rec in source_records:
+        if match.source_var not in rec or _s(rec.get(match.source_var)) == "":
+            p.quarantined.append(rec)
+            continue
+        key = _s(rec.get(match.source_var))
+        src_by_key.setdefault(key, rec)
+
+    src_keys = [_s(r.get(match.source_var)) for r in source_records if match.source_var in r and _s(r.get(match.source_var)) != ""]
+    src_dups = _dups(src_keys)
+    for key in sorted(src_dups):
+        p.actions.append(
+            Action("conflict", key, id_column, reason="duplicate match key in source")
+        )
+
+    # -- classify ------------------------------------------------------------
+    def _payload(rec: dict, key: str, id_value) -> dict:
+        payload = project(columns, rec)
+        payload[match.store_col] = key
+        payload[id_column] = id_value
+        return payload
+
+    next_tag = p.next_tag
+    for key in sorted(set(src_keys) - set(store_keys), key=lambda k: src_by_key[k].get(match.source_var, k)):
+        if key in src_dups:
+            continue
+        p.actions.append(
+            Action("add", key, id_column, next_tag, _payload(src_by_key[key], key, next_tag))
+        )
+        next_tag += 1
+
+    for key in sorted(set(src_keys) & set(store_keys)):
+        if key in src_dups or key in store_dups:
+            continue
+        rec = src_by_key[key]
+        row = store_by_key[key]
+        desired = project(columns, rec)
+        id_value = row.get(id_column)
+        payload = dict(desired)
+        payload[match.store_col] = key
+        payload[id_column] = id_value
+        if any(_s(desired[c.store_col]) != _s(row.get(c.store_col)) for c in columns):
+            p.actions.append(Action("update", key, id_column, id_value, payload))
+        else:
+            p.actions.append(Action("same", key, id_column, id_value, payload))
+
+    # -- deletes -------------------------------------------------------------
+    absent = set(store_keys) - set(src_keys)
+    p.delete_candidates = sorted(absent)
+    for key in sorted(absent):
+        if key in store_dups:
+            continue
+        row = store_by_key[key]
+        id_value = row.get(id_column)
+        if delete_policy == "full_history":
+            p.actions.append(Action("delete", key, id_column, id_value))
+        elif delete_policy == "tracked_only":
+            if key in tracked:
+                p.actions.append(Action("delete", key, id_column, id_value))
+        # "manual": report candidates only (no delete actions)
+
+    return p
