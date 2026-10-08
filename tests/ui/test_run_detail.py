@@ -174,6 +174,33 @@ def test_job_dialog_button_design_icons():
     assert dlg.cancel_button.text() == "Cancel"
 
 
+def test_job_dialog_schedule_fields_follow_unit():
+    dlg = JobDialog()
+    dlg.schedule_unit_combo.setCurrentIndex(
+        dlg.schedule_unit_combo.findData("minute"))
+    assert dlg.schedule_at_edit.isVisibleTo(dlg) is False
+    assert dlg.schedule_weekday_combo.isVisibleTo(dlg) is False
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("day"))
+    assert dlg.schedule_at_edit.isVisibleTo(dlg) is True
+    assert dlg.schedule_weekday_combo.isVisibleTo(dlg) is False
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("week"))
+    assert dlg.schedule_at_edit.isVisibleTo(dlg) is True
+    assert dlg.schedule_weekday_combo.isVisibleTo(dlg) is True
+
+
+def test_job_dialog_schedule_every_spin_range_follows_unit_and_clamps():
+    dlg = JobDialog()
+    dlg.schedule_unit_combo.setCurrentIndex(
+        dlg.schedule_unit_combo.findData("minute"))
+    dlg.schedule_every_spin.setValue(59)
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("day"))
+    assert dlg.schedule_every_spin.maximum() == 31
+    assert dlg.schedule_every_spin.value() <= 31
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("week"))
+    assert dlg.schedule_every_spin.maximum() == 52
+    assert 1 <= dlg.schedule_every_spin.value() <= 52
+
+
 # -- ScheduleOverview --------------------------------------------------------
 
 def test_schedule_overview_rows_and_model():

@@ -32,7 +32,11 @@ from PySide6.QtWidgets import (
 from store_sync.core.config import ColumnBinding, Schedule, human
 from store_sync.ui.job_table_model import JobTableModel
 from store_sync.ui.models import _DictTableModel
-from store_sync.ui.dialogs import SCHEDULE_UNIT_ITEMS, WEEKDAY_ITEMS
+from store_sync.ui.dialogs import (
+    SCHEDULE_UNIT_ITEMS,
+    WEEKDAY_ITEMS,
+    refresh_schedule_ui,
+)
 
 DELETE_POLICIES = [
     ("Full history", "full_history"),
@@ -174,12 +178,14 @@ class JobDetail(QWidget):
         self.schedule_every_spin = QSpinBox()
         self.schedule_every_spin.setRange(1, 59)
         row.addWidget(self.schedule_every_spin)
-        row.addWidget(QLabel("At:"))
+        self.schedule_at_label = QLabel("At:")
+        row.addWidget(self.schedule_at_label)
         self.schedule_at_edit = QTimeEdit()
         self.schedule_at_edit.setTime(QTime(2, 0))
         self.schedule_at_edit.setDisplayFormat("HH:mm")
         row.addWidget(self.schedule_at_edit)
-        row.addWidget(QLabel("On:"))
+        self.schedule_weekday_label = QLabel("On:")
+        row.addWidget(self.schedule_weekday_label)
         self.schedule_weekday_combo = QComboBox()
         for label, value in WEEKDAY_ITEMS:
             self.schedule_weekday_combo.addItem(label, value)
@@ -190,16 +196,16 @@ class JobDetail(QWidget):
         self.schedule_preview.setObjectName("SchedulePreview")
         lay.addWidget(self.schedule_preview)
         lay.addStretch(1)
-        # Plain refresh on every widget change; Task 5 adds unit-based
-        # visibility toggling (at/weekday only for day/week).
+        # Preview + per-unit field visibility/spin range (Task 5; spec §4.6).
         self.schedule_unit_combo.currentIndexChanged.connect(
-            self._update_schedule_preview
+            self._refresh_schedule_fields
         )
         self.schedule_every_spin.valueChanged.connect(self._update_schedule_preview)
         self.schedule_at_edit.timeChanged.connect(self._update_schedule_preview)
         self.schedule_weekday_combo.currentIndexChanged.connect(
             self._update_schedule_preview
         )
+        self._refresh_schedule_fields()
         return w
 
     def _history_tab(self) -> QWidget:
@@ -331,7 +337,16 @@ class JobDetail(QWidget):
             self.schedule_weekday_combo.setCurrentIndex(widx)
 
     def _update_schedule_preview(self, *args) -> None:
-        self.schedule_preview.setText(f"Runs: {human(self.schedule())}")
+        self.schedule_preview.setText(human(self.schedule()))
+
+    def _refresh_schedule_fields(self, *args) -> None:
+        refresh_schedule_ui(
+            unit=self.schedule_unit_combo.currentData() or "",
+            every_spin=self.schedule_every_spin,
+            at_widgets=[self.schedule_at_label, self.schedule_at_edit],
+            weekday_widgets=[self.schedule_weekday_label, self.schedule_weekday_combo],
+        )
+        self._update_schedule_preview()
 
     def _on_add_column(self) -> None:
         self.binding_model.add_row()

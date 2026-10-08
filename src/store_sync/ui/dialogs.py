@@ -63,6 +63,38 @@ WEEKDAY_ITEMS = [
     ("Sunday", 6),
 ]
 
+SCHEDULE_EVERY_MAX = {
+    "": 59,
+    "minute": 59,
+    "hour": 23,
+    "day": 31,
+    "week": 52,
+}
+
+
+def refresh_schedule_ui(
+    *,
+    unit: str,
+    every_spin: QSpinBox,
+    at_widgets: list,
+    weekday_widgets: list,
+) -> None:
+    """Per-unit schedule control state (spec §4.1/§4.6).
+
+    `at` shows only for day/week, weekday only for week; the *every N* spin
+    range follows the unit's max and Qt clamps the value into it.
+    """
+    show_at = unit in ("day", "week")
+    show_weekday = unit == "week"
+    for w in at_widgets:
+        w.setVisible(show_at)
+    for w in weekday_widgets:
+        w.setVisible(show_weekday)
+    maximum = SCHEDULE_EVERY_MAX.get(unit, 59)
+    every_spin.setMaximum(maximum)
+    if every_spin.value() > maximum:
+        every_spin.setValue(maximum)
+
 
 class JobDialog(QDialog):
     """Modal form for creating or editing one store job."""
@@ -103,6 +135,9 @@ class JobDialog(QDialog):
         self.schedule_unit_combo = QComboBox()
         for label, value in SCHEDULE_UNIT_ITEMS:
             self.schedule_unit_combo.addItem(label, value)
+        self.schedule_unit_combo.currentIndexChanged.connect(
+            self._refresh_schedule_fields
+        )
         form.addRow("Schedule", self.schedule_unit_combo)
         self.schedule_every_spin = QSpinBox()
         self.schedule_every_spin.setRange(1, 59)
@@ -116,6 +151,7 @@ class JobDialog(QDialog):
             self.schedule_weekday_combo.addItem(label, value)
         form.addRow("Weekday", self.schedule_weekday_combo)
         root.addLayout(form)
+        self._refresh_schedule_fields()
 
         self.binding_model = JobTableModel(self)
         self.binding_view = QTableView()
@@ -202,6 +238,14 @@ class JobDialog(QDialog):
         widx = self.schedule_weekday_combo.findData(int(schedule.weekday))
         if widx >= 0:
             self.schedule_weekday_combo.setCurrentIndex(widx)
+
+    def _refresh_schedule_fields(self, *args) -> None:
+        refresh_schedule_ui(
+            unit=self.schedule_unit_combo.currentData() or "",
+            every_spin=self.schedule_every_spin,
+            at_widgets=[self.schedule_at_edit],
+            weekday_widgets=[self.schedule_weekday_combo],
+        )
 
     def entry_fields(self) -> dict:
         return {

@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from store_sync.core.config import (BindingConfig, ColumnBinding, JobConfig,
-    Schedule, SourceConfig, StoreConfig, WriteConfig)
+    Schedule, SourceConfig, StoreConfig, WriteConfig, human)
 from store_sync.ui.job_detail import JobDetail
 
 _app = QApplication.instance() or QApplication([])
@@ -164,3 +164,51 @@ def test_history_double_click_emits_run_activated():
     ])
     d.history_view.doubleClicked.emit(d.history_model.index(1, 0))
     assert seen == [7]
+
+
+def test_schedule_fields_follow_unit():
+    d = JobDetail()
+    d.load(E(), a_job())
+    # Switch to the Schedule tab first: widgets on a non-current tab page
+    # report isVisibleTo()=False regardless of our visibility logic.
+    d.tabs.setCurrentIndex(d.tabs.indexOf(d.tabs.widget(2)))
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("minute"))
+    assert d.schedule_at_edit.isVisibleTo(d) is False
+    assert d.schedule_weekday_combo.isVisibleTo(d) is False
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("week"))
+    assert d.schedule_weekday_combo.isVisibleTo(d) is True
+    assert d.schedule_preview.text() == human(d.schedule())
+
+
+def test_schedule_fields_day_shows_at_not_weekday():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.tabs.setCurrentIndex(d.tabs.indexOf(d.tabs.widget(2)))
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("day"))
+    assert d.schedule_at_edit.isVisibleTo(d) is True
+    assert d.schedule_weekday_combo.isVisibleTo(d) is False
+
+
+def test_schedule_fields_manual_and_hour_hide_at_and_weekday():
+    d = JobDetail()
+    d.load(E(), a_job())
+    for unit in ("", "hour"):
+        d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData(unit))
+        assert d.schedule_at_edit.isVisibleTo(d) is False
+        assert d.schedule_weekday_combo.isVisibleTo(d) is False
+
+
+def test_schedule_every_spin_range_follows_unit_and_clamps():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("minute"))
+    d.schedule_every_spin.setValue(59)
+    assert d.schedule_every_spin.maximum() == 59
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("day"))
+    assert d.schedule_every_spin.maximum() == 31
+    assert d.schedule_every_spin.value() <= 31
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("hour"))
+    assert d.schedule_every_spin.maximum() == 23
+    d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("week"))
+    assert d.schedule_every_spin.maximum() == 52
+    assert 1 <= d.schedule_every_spin.value() <= 52
