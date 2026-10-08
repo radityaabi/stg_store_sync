@@ -23,6 +23,7 @@ class Action:
     id_value: object = None
     payload: dict = field(default_factory=dict)
     reason: str = ""
+    side: str = ""  # "store" | "source" on conflicts; "" otherwise
 
 
 @dataclass
@@ -42,7 +43,7 @@ class Plan:
     @property
     def blocked(self) -> bool:
         """True when a conflict must halt the job (store-side duplicates)."""
-        return any(a.kind == "conflict" for a in self.actions)
+        return any(a.kind == "conflict" and a.side == "store" for a in self.actions)
 
     @property
     def ok(self) -> bool:
@@ -95,8 +96,10 @@ def plan(
 
     # -- index the store by match key; duplicates are a hard conflict ---------
     store_by_key: dict[str, dict] = {}
+    store_missing_match_col = False
     for row in store_rows:
         if match.store_col not in row:
+            store_missing_match_col = True
             continue
         key = _s(row.get(match.store_col))
         store_by_key.setdefault(key, row)
@@ -105,7 +108,13 @@ def plan(
     store_dups = _dups(store_keys)
     for key in sorted(store_dups):
         p.actions.append(
-            Action("conflict", key, id_column, reason="duplicate match key in store")
+            Action("conflict", key, id_column,
+                   reason="duplicate match key in store", side="store")
+        )
+    if store_missing_match_col:
+        p.actions.append(
+            Action("conflict", "", id_column,
+                   reason="store row missing match column", side="store")
         )
 
     # -- index the source by match key ---------------------------------------
@@ -121,7 +130,8 @@ def plan(
     src_dups = _dups(src_keys)
     for key in sorted(src_dups):
         p.actions.append(
-            Action("conflict", key, id_column, reason="duplicate match key in source")
+            Action("conflict", key, id_column,
+                   reason="duplicate match key in source", side="source")
         )
 
     # -- classify ------------------------------------------------------------

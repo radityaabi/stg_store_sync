@@ -172,6 +172,25 @@ class TestFailClosed:
         assert any(a.kind == "same" for a in p.actions)
 
 
+class TestConflictOrigin:
+    def test_source_dup_does_not_block(self):
+        src = source_records() + [{"SbjNum": "104", "T_QPM1_1": "Dup", "Q32": 1}]
+        p = make_plan(source_records=src)
+        assert p.blocked is False
+        assert any(a.kind == "conflict" and a.side == "source" for a in p.actions)
+
+    def test_store_dup_blocks(self):
+        rows = store_rows() + [{"No": 9, "SbjNum": "101", "I7_1_2": "x", "Q32": 1}]
+        p = make_plan(store_rows=rows)
+        assert p.blocked is True
+        assert any(a.kind == "conflict" and a.side == "store" for a in p.actions)
+
+    def test_store_row_missing_match_col_is_store_conflict(self):
+        rows = store_rows() + [{"No": 9, "I7_1_2": "x", "Q32": 1}]
+        p = make_plan(store_rows=rows)
+        assert p.blocked is True
+
+
 class TestNextTag:
     def test_next_tag_is_max_plus_one(self):
         p = make_plan()
