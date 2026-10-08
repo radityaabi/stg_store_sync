@@ -79,18 +79,19 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 - [ ] **Task 2.1: `core/binding.py` — alias mapping + key/id verification**
   - Description: `mapped` alias pairs `{source_var → store_col}`; `strict`
     additionally requires `source == store`; auto-suggest store-col→source-var by
-    value overlap; match-key uniqueness test; **id-column verification** (probe
-    that `Store.id_column` behaves as the API key).
+    value overlap; match-key uniqueness test; **id-column declaration check**
+    (§4.2.1: exists → unique → no-op `UpdateRow` probe).
   - Acceptance: a non-unique match key (e.g. `QRelID_RVid`, 248/296) is rejected;
-    `strict` mismatch is blocked with a reason; a wrong `id_column` is flagged.
+    `strict` mismatch is blocked with a reason; a wrong `id_column` returns
+    "id column data not found" and is flagged.
   - Verification: `pytest tests/core/test_binding.py` (fixtures from real shapes).
   - Deps: 1.2, 1.3. Files: 2. Scope: M.
 
 - [ ] **Task 2.2: Preflight orchestration** — produce the review table
   (store col, suggested var, overlap, status) from a live store + sample export,
-  and confirm the declared id/tag column.
+  and run the id-column declaration check (§4.2.1).
   - Acceptance: given the Link-1/`Gran_Turismo_Link2` shapes, the table matches
-    spec §5.2 and the id column is confirmed as `uniqueID`.
+    spec §5.2 and the declared `id_column=uniqueID` is confirmed by the no-op probe.
   - Deps: 2.1. Files: 1. Scope: S.
 
 ### Checkpoint: Binding

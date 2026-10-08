@@ -25,8 +25,8 @@
 - [ ] `pytest` green; client mock-covered; config validation proven
 
 ## Phase 2 — Binding gate
-- [ ] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column verify
-- [ ] 2.2 Preflight orchestration — review table from live store + sample export
+- [ ] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column declaration check (exists/uniqueness/no-op probe)
+- [ ] 2.2 Preflight orchestration — review table from live store + sample export + id-column check
 
 ## Checkpoint: Binding
 - [ ] alias pairs human-approved; `strict` blocks on mismatch; id column verified

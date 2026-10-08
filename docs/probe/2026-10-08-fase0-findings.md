@@ -29,6 +29,12 @@ So the id column is **store-specific**: `No` on the dummy store, `uniqueID` on
 `Gran_Turismo_Link2`. It must be **declared per job** and **verified in preflight**;
 it cannot be assumed.
 
+**Decision:** the user declares the id column (IsTag) in the GUI; the system does
+**not** auto-discover it. Preflight verifies the declaration: column exists, values
+are unique, and a **no-op `UpdateRow`** (full payload, identical values) returns
+`{Done: true}` without changing the row. A wrong declaration yields
+`500 Error: id column data not found`, which preflight surfaces.
+
 `DeleteRow` takes the tag value as a **path** segment:
 
 ```

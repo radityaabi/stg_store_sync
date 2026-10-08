@@ -164,10 +164,34 @@ distinct = 296 ✅; **`QRelID_RVid` distinct = 248 ❌** (has duplicates);
 
 `No` is **not** automatically the id column — the id column is whatever the store
 designates (probe §F1). On `Gran_Turismo_Link2` it is `uniqueID`; on the dummy
-store it is `No`. The job **declares** the id column and preflight **verifies** it.
+store it is `No`.
+
+**Decision (2026-10-08):** the id column (IsTag) is **declared by the user** in
+the GUI (`store.id_column`, a required field). It is **not** auto-discovered. The
+system still **verifies** it in preflight so a wrong value can never cause a
+mis-keyed write (§4.2.1).
 
 Semantics: **per-interview**. Each distinct `SbjNum` = one row. A re-interview of
 the same panelist is a **new row**.
+
+### 4.2.1 Id-column declaration & verification
+
+The user sets `store.id_column` in the GUI. For safety, preflight runs an
+**id-column check** (read-only except one no-op probe):
+
+```
+1) column exists on the store?          no  → reject, job cannot write
+2) values unique across store rows?     dup → reject (not a 1:1 key)
+3) no-op probe on one row:
+     UpdateRow with the FULL payload, all values IDENTICAL
+       200 {Done:true} and the row is unchanged  → id_column CORRECT ✅
+       500 "id column data not found"            → id_column WRONG   ❌
+```
+
+The no-op probe is safe: sending identical values changes nothing (verified on
+store 17417 — 295 rows in, 295 rows out). It runs **once at preflight**, not on
+every sync, and is exempt from the `dry_run` guard (it is a verification step,
+not a data change).
 
 ### 4.2 Lookup
 
@@ -255,8 +279,8 @@ Runs (once, and whenever the config changes) and produces a review table:
 | `I8a_1` | `T_QPM1_3` | 295/296 | ⚠️ format differs |
 | `Q32` | `Q32` | 295/295 | ✅ |
 
-Preflight also **verifies the declared id/tag column** actually behaves as the
-store key (probe §F1) and validates the match key's uniqueness (§4.4).
+Preflight also runs the **id-column declaration check** (§4.2.1: exists, unique,
+no-op probe) and validates the match key's uniqueness (§4.4).
 
 ### 5.3 Value comparison — strict 100%
 
@@ -330,7 +354,7 @@ stg-store-sync/
 
 ```yaml
 job: gran_turismo_link1
-store:  { id: 17417, id_column: "uniqueID" }   # API id/tag column (probe-verified)
+store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; preflight-verified
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
           window_days: 0,          # 0 = full history
           date_type: Upload }      # Upload = server-arrival time
