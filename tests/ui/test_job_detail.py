@@ -77,11 +77,21 @@ def test_config_fields_round_trip():
         "id_column": "No",
         "survey_id": "SURV",
         "match_source_var": "SbjNum",
+        "match_store_col": "SbjNum",
         "window_days": 0,
         "date_type": "Upload",
         "delete_policy": "full_history",
         "dry_run": True,
     }
+
+
+def test_match_store_col_round_trips_distinct():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.match_var_edit.setText("SbjNum")
+    d.match_store_edit.setText("SubjectID")
+    assert d.config_fields()["match_source_var"] == "SbjNum"
+    assert d.config_fields()["match_store_col"] == "SubjectID"
 
 def test_set_pull_terms_and_dict_tables():
     d = JobDetail()

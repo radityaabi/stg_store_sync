@@ -65,6 +65,8 @@ class JobDialog(QDialog):
         form.addRow("Survey ID", self.survey_id_edit)
         self.match_var_edit = QLineEdit()
         form.addRow("Match var", self.match_var_edit)
+        self.match_store_edit = QLineEdit()
+        form.addRow("Match store col", self.match_store_edit)
         self.window_days_edit = QLineEdit("0")
         form.addRow("Window days", self.window_days_edit)
         self.date_type_edit = QLineEdit("Upload")
@@ -115,6 +117,9 @@ class JobDialog(QDialog):
             self.survey_id_edit.setText(job.source.survey_id)
             match = job.binding.match
             self.match_var_edit.setText(match.source_var if match else "")
+            self.match_store_edit.setText(
+                match.store_col if match else ""
+            )
             self.window_days_edit.setText(str(job.source.window_days))
             self.date_type_edit.setText(job.source.date_type)
             idx = self.delete_policy_combo.findData(job.write.delete_policy)
@@ -125,7 +130,8 @@ class JobDialog(QDialog):
 
     def job(self) -> JobConfig:
         match_var = self.match_var_edit.text().strip()
-        match = ColumnBinding(match_var, match_var) if match_var else None
+        match_store = self.match_store_edit.text().strip() or match_var
+        match = ColumnBinding(match_var, match_store) if match_var else None
         return JobConfig(
             job=self.name_edit.text().strip(),
             store=StoreConfig(

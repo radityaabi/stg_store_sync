@@ -95,6 +95,9 @@ class JobDetail(QWidget):
         row2.addWidget(QLabel("Match var:"))
         self.match_var_edit = QLineEdit()
         row2.addWidget(self.match_var_edit)
+        row2.addWidget(QLabel("Match store col:"))
+        self.match_store_edit = QLineEdit()
+        row2.addWidget(self.match_store_edit)
         lay.addLayout(row2)
 
         row3 = QHBoxLayout()
@@ -234,6 +237,9 @@ class JobDetail(QWidget):
         self.survey_id_edit.setText(job.source.survey_id)
         match = job.binding.match
         self.match_var_edit.setText(match.source_var if match else "")
+        self.match_store_edit.setText(
+            (match.store_col if match else "") or (match.source_var if match else "")
+        )
         self.window_days_edit.setText(str(job.source.window_days))
         self.date_type_edit.setText(job.source.date_type)
         idx = self.delete_policy_combo.findData(job.write.delete_policy)
@@ -273,6 +279,7 @@ class JobDetail(QWidget):
             "id_column": self.id_column_edit.text().strip(),
             "survey_id": self.survey_id_edit.text().strip(),
             "match_source_var": self.match_var_edit.text().strip(),
+            "match_store_col": self.match_store_edit.text().strip(),
             "window_days": int(self.window_days_edit.text().strip() or 0),
             "date_type": self.date_type_edit.text().strip(),
             "delete_policy": self.delete_policy_combo.currentData(),

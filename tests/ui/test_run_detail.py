@@ -115,6 +115,7 @@ def test_job_dialog_edit_round_trip():
     assert dlg.id_column_edit.text() == "No"
     assert dlg.survey_id_edit.text() == "SURV"
     assert dlg.match_var_edit.text() == "SbjNum"
+    assert dlg.match_store_edit.text() == "SbjNum"
     assert dlg.window_days_edit.text() == "5"
     assert dlg.schedule == "0 3 * * *"
     assert dlg.enabled is True
@@ -122,6 +123,27 @@ def test_job_dialog_edit_round_trip():
     assert dlg.job() == a_job()
     assert dlg.entry_fields() == {
         "name": "a", "schedule": "0 3 * * *", "enabled": True}
+
+
+def distinct_match_job():
+    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV", 5, "Upload"),
+        BindingConfig(ColumnBinding("SbjNum", "SubjectID"),
+            [ColumnBinding("T_QPM1_1", "I7_1_2")]), WriteConfig())
+
+
+def test_job_dialog_match_pair_round_trips_distinct():
+    dlg = JobDialog(entry=an_entry(), job=distinct_match_job())
+    assert dlg.match_var_edit.text() == "SbjNum"
+    assert dlg.match_store_edit.text() == "SubjectID"
+    j = dlg.job()
+    assert j.binding.match.source_var == "SbjNum"
+    assert j.binding.match.store_col == "SubjectID"
+
+
+def test_job_dialog_match_store_defaults_to_var():
+    dlg = JobDialog()
+    dlg.match_var_edit.setText("SbjNum")
+    assert dlg.job().binding.match.store_col == "SbjNum"
 
 
 def test_job_dialog_defaults():
