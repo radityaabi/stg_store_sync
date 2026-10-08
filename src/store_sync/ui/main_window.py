@@ -10,8 +10,7 @@ workspace, dark console log, bottom action rail.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -30,103 +29,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from store_sync.core.config import ColumnBinding, JobConfig, WriteConfig
+from store_sync.core.config import JobConfig, WriteConfig
+from store_sync.ui.job_table_model import JobTableModel  # noqa: F401  (re-export)
+from store_sync.ui.models import _DictTableModel
 
 ICON = "\u25cf"  # status dot
-
-
-class JobTableModel(QAbstractTableModel):
-    """Editable binding table: store column · source variable · pull term · kind.
-
-    The pull term column is **read-only** — it is derived, not entered (§7.3).
-    """
-
-    HEADERS = ["Store column", "Source variable", "Pull term (derived)", "Kind"]
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._columns: list[ColumnBinding] = []
-        self._pull_terms: dict[str, str] = {}
-
-    # -- Qt API ------------------------------------------------------------
-    def rowCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self._columns)
-
-    def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self.HEADERS)
-
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
-            return self.HEADERS[section]
-        return None
-
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid():
-            return None
-        col = self._columns[index.row()]
-        c = index.column()
-        if role in (Qt.DisplayRole, Qt.EditRole):
-            if c == 0:
-                return col.store_col
-            if c == 1:
-                return col.source_var
-            if c == 2:
-                return self._pull_terms.get(col.source_var, "")
-            if c == 3:
-                return col.kind
-        if role == Qt.ForegroundRole and c == 2:
-            return QColor("#64748b")  # muted: derived/read-only
-        return None
-
-    def flags(self, index):
-        base = super().flags(index)
-        if index.column() == 2:
-            return base & ~Qt.ItemIsEditable
-        return base | Qt.ItemIsEditable
-
-    def setData(self, index, value, role=Qt.EditRole):
-        if role != Qt.EditRole or not index.isValid():
-            return False
-        col = self._columns[index.row()]
-        c = index.column()
-        value = "" if value is None else str(value)
-        if c == 0:
-            col.store_col = value
-        elif c == 1:
-            col.source_var = value
-        elif c == 3:
-            col.kind = value or "text"
-        else:
-            return False
-        self.dataChanged.emit(index, index)
-        return True
-
-    # -- app API -----------------------------------------------------------
-    def set_columns(self, columns: list[ColumnBinding]) -> None:
-        self.beginResetModel()
-        self._columns = list(columns)
-        self.endResetModel()
-
-    def set_pull_terms(self, mapping: dict[str, str]) -> None:
-        self._pull_terms = dict(mapping)
-        if self._columns:
-            self.dataChanged.emit(
-                self.index(0, 2), self.index(len(self._columns) - 1, 2)
-            )
-
-    def columns(self) -> list[ColumnBinding]:
-        return list(self._columns)
-
-    def add_row(self, binding: ColumnBinding | None = None) -> None:
-        self.beginInsertRows(QModelIndex(), len(self._columns), len(self._columns))
-        self._columns.append(binding or ColumnBinding("", "", "text"))
-        self.endInsertRows()
-
-    def remove_row(self, row: int) -> None:
-        if 0 <= row < len(self._columns):
-            self.beginRemoveRows(QModelIndex(), row, row)
-            del self._columns[row]
-            self.endRemoveRows()
 
 
 class MainWindow(QWidget):
@@ -381,35 +288,6 @@ class MainWindow(QWidget):
 
 
 # --- small generic dict table ----------------------------------------------
-
-
-class _DictTableModel(QAbstractTableModel):
-    def __init__(self, fields: list[str], parent=None):
-        super().__init__(parent)
-        self.fields = fields
-        self._rows: list[dict] = []
-
-    def rowCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self._rows)
-
-    def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(self.fields)
-
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
-            return self.fields[section]
-        return None
-
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
-            return None
-        val = self._rows[index.row()].get(self.fields[index.column()], "")
-        return "" if val is None else str(val)
-
-    def set_rows(self, rows: list[dict]) -> None:
-        self.beginResetModel()
-        self._rows = list(rows)
-        self.endResetModel()
 
 
 def _dict_view(model: _DictTableModel) -> QTableWidget:
