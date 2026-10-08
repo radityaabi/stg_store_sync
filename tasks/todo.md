@@ -39,10 +39,10 @@
 - [ ] Dry-run plan for real job shows only expected classifications
 
 ## Phase 4 — Adoption + Write
-- [ ] 4.1 `core/state.py` — SQLite: jobs, run log, conflicts, hashes
-- [ ] 4.2 Legacy `SbjNum` adoption (1:1 only; quarantine ambiguity)
-- [ ] 4.3 `core/writer.py` — apply + full-row payloads + throttle + retry + re-read verify
-
+- [x] 4.1 `core/state.py` — SQLite: jobs, run log, conflicts, hashes
+- [x] 4.2 Legacy `SbjNum` adoption (1:1 only; quarantine ambiguity)
+- [x] 4.3 `core/writer.py` — apply + full-row payloads + throttle + retry + re-read verify
+- [x] 4.4 `core/sync.py` — orchestrator (index → pull → load → plan → apply → state)
 ## Checkpoint: Write
 - [ ] End-to-end dry-run yields correct plan, zero writes
 - [ ] One controlled real write (add/update/delete) verified

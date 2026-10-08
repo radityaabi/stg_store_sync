@@ -135,13 +135,22 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Acceptance: 1:1 matches get `SbjNum`; ambiguous rows are quarantined, not guessed.
   - Deps: 2.1, 3.1, 4.1. Files: 2. Scope: M.
 
-- [ ] **Task 4.3: `core/writer.py`** — apply plan: `AddRow`/`UpdateRow`/`DeleteRow`,
+- [x] **Task 4.3: `core/writer.py`** — apply plan: `AddRow`/`UpdateRow`/`DeleteRow`,
   throttle, retry, **full-row payloads**, id column never rewritten, re-read after
   deletes to confirm.
   - Acceptance: update is an idempotent no-op when values match; add sends the
     assigned tag; delete verified by re-read; id column untouched on update.
   - Verification: `pytest tests/core/test_writer.py` (mock transport).
   - Deps: 3.2, 4.1. Files: 2. Scope: M.
+
+- [x] **Task 4.4: `core/sync.py` (discovered gap)** — orchestrator wiring the
+  §7.2 data flow end to end: build survey index → pull (filter/fallback) →
+  load store → plan → apply → record run + tracking in `state`. Dry-run default.
+  - Acceptance: one `run_sync(config, client, state)` call produces a full plan,
+    writes nothing in dry-run, and records a run row + conflicts; a store-side
+    conflict halts before any write.
+  - Verification: `pytest tests/core/test_sync.py` (mock client + state).
+  - Deps: 3.1, 3.2, 4.1, 4.3. Files: 1. Scope: M.
 
 ### Checkpoint: Write
 - [ ] End-to-end dry-run on real config produces a correct plan with zero writes
