@@ -25,15 +25,15 @@
 - [x] `pytest` green (42 tests); client mock-covered; config validation proven
 
 ## Phase 2 — Binding gate
-- [ ] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column declaration check (exists/uniqueness/no-op probe)
-- [ ] 2.2 Preflight orchestration — review table from live store + sample export + id-column check
+- [x] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column declaration check (exists/uniqueness/no-op probe)
+- [x] 2.2 Preflight orchestration — review table from live store + sample export + id-column check
 
 ## Checkpoint: Binding
-- [ ] alias pairs human-approved; `strict` blocks on mismatch; id column verified
+- [x] alias pairs human-approved; `strict` blocks on mismatch; id column verified
 
 ## Phase 3 — Data
-- [ ] 3.1 `core/fetcher.py` — pull + `variableNames` filter + chunk + retry + EAV flatten (empty→`""`) + verify + project
-- [ ] 3.2 `core/planner.py` — diff by match key → add/update/delete/conflicts (fail-closed); empty is a value
+- [x] 3.1 `core/fetcher.py` — pull + `variableNames` filter + chunk + retry + EAV flatten (empty→`""`) + verify + project
+- [x] 3.2 `core/planner.py` — diff by match key → add/update/delete/conflicts (fail-closed); empty is a value
 
 ## Checkpoint: Data
 - [ ] Dry-run plan for real job shows only expected classifications

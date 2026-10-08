@@ -76,7 +76,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
 ### Phase 2: Binding gate
 
-- [ ] **Task 2.1: `core/binding.py` — alias mapping + key/id verification**
+- [x] **Task 2.1: `core/binding.py` — alias mapping + key/id verification**
   - Description: `mapped` alias pairs `{source_var → store_col}`; `strict`
     additionally requires `source == store`; auto-suggest store-col→source-var by
     value overlap; match-key uniqueness test; **id-column declaration check**
@@ -87,7 +87,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Verification: `pytest tests/core/test_binding.py` (fixtures from real shapes).
   - Deps: 1.2, 1.3. Files: 2. Scope: M.
 
-- [ ] **Task 2.2: Preflight orchestration** — produce the review table
+- [x] **Task 2.2: Preflight orchestration** — produce the review table
   (store col, suggested var, overlap, status) from a live store + sample export,
   and run the id-column declaration check (§4.2.1).
   - Acceptance: given the Link-1/`Gran_Turismo_Link2` shapes, the table matches
@@ -95,11 +95,11 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Deps: 2.1. Files: 1. Scope: S.
 
 ### Checkpoint: Binding
-- [ ] alias pairs approved by a human; `strict` can block; id column verified; `mapped` requires explicit approval
+- [x] alias pairs approved by a human; `strict` can block; id column verified; `mapped` requires explicit approval
 
 ### Phase 3: Data
 
-- [ ] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks with an
+- [x] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks with an
   optional `variableNames` filter, where the **pull term (question-level base
   name) is derived automatically** from the survey structure (answer var → its
   question's `VariableName`); if a var cannot be resolved, fall back to a full
@@ -112,7 +112,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Verification: `pytest tests/core/test_fetcher.py`.
   - Deps: 1.3. Files: 2. Scope: M.
 
-- [ ] **Task 3.2: `core/planner.py`** — diff store vs source by **match key**
+- [x] **Task 3.2: `core/planner.py`** — diff store vs source by **match key**
   (`SbjNum`) → add/update/delete/conflicts; fail-closed rules (§4.4). Add assigns
   `next_tag = max(id_column)+1`.
   - Acceptance: add/update/skip/delete classification proven; missing/dup key →
@@ -121,7 +121,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Deps: 2.1, 3.1. Files: 2. Scope: M.
 
 ### Checkpoint: Data
-- [ ] A dry-run plan for the real job shows only expected classifications
+- [x] A dry-run plan for the real job shows only expected classifications
 
 ### Phase 4: Adoption + Write
 
