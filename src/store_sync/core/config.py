@@ -11,11 +11,29 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import re
+
 import yaml
 
 VALID_MODES = {"mapped", "strict"}
 VALID_OPS = {"full_sync"}
 VALID_KINDS = {"text", "number"}
+
+# Per-list schedule units (spec §4.3); "" means the job never runs itself.
+SCHEDULE_UNITS: tuple[str, ...] = ("", "minute", "hour", "day", "week")
+
+# "HH:MM" 24h, zero-padded — required by day/week schedules.
+_AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+_WEEKDAY_NAMES = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
 
 
 class DeletePolicy(str, Enum):
@@ -129,6 +147,101 @@ class WriteConfig:
         if self.normalize:
             out["normalize"] = self.normalize
         return out
+
+
+@dataclass(frozen=True)
+class Schedule:
+    """When a job runs itself (spec §4.3): every-N `unit`, optionally at `at`.
+
+    `unit=""` means manual-only (the operator presses the button). `at` is a
+    zero-padded "HH:MM" local time, required for day/week. `weekday` is 0-6,
+    Monday=0, used only by week.
+    """
+
+    unit: str = ""
+    every: int = 1
+    at: str = ""
+    weekday: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> "Schedule":
+        if not d:
+            return cls()
+        return cls(
+            unit=str(d.get("unit", "")),
+            every=int(d.get("every", 1)),
+            at=str(d.get("at", "")),
+            weekday=int(d.get("weekday", 0)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unit": self.unit,
+            "every": self.every,
+            "at": self.at,
+            "weekday": self.weekday,
+        }
+
+    def validate(self) -> list[str]:
+        """Return every schedule error; empty list means usable."""
+        errors: list[str] = []
+        if self.unit not in SCHEDULE_UNITS:
+            errors.append(
+                f"schedule.unit must be one of {list(SCHEDULE_UNITS)}, "
+                f"got {self.unit!r}"
+            )
+            return errors
+        if self.unit == "":
+            return errors
+        if self.unit == "minute":
+            if not 1 <= self.every <= 59:
+                errors.append("schedule.every must be 1..59 for minute")
+        elif self.unit == "hour":
+            if not 1 <= self.every <= 23:
+                errors.append("schedule.every must be 1..23 for hour")
+        elif self.unit == "day":
+            if not 1 <= self.every <= 31:
+                errors.append("schedule.every must be 1..31 for day")
+        elif self.unit == "week":
+            if not 1 <= self.every <= 52:
+                errors.append("schedule.every must be 1..52 for week")
+            if not 0 <= self.weekday <= 6:
+                errors.append("schedule.weekday must be 0..6 (0=Monday)")
+        if self.unit in ("day", "week"):
+            if not self.at:
+                errors.append(f"schedule.at is required for {self.unit}")
+            elif not _AT_RE.match(self.at):
+                errors.append(
+                    f"schedule.at must match HH:MM (00:00..23:59), got {self.at!r}"
+                )
+        return errors
+
+
+def _plural(n: int, noun: str) -> str:
+    return f"{noun}" if n == 1 else f"{n} {noun}s"
+
+
+def human(schedule: Schedule) -> str:
+    """One-line label for the dashboard's Schedule column (spec §4.3).
+
+    Malformed values (unknown unit, day/week without `at`) fall back to
+    "manual only" so a bad stored value never renders an empty cell.
+    """
+    if schedule.validate():
+        return "manual only"
+    if schedule.unit == "":
+        return "manual only"
+    if schedule.unit == "minute":
+        return f"every {_plural(schedule.every, 'minute')}"
+    if schedule.unit == "hour":
+        return "hourly" if schedule.every == 1 else f"every {schedule.every} hours"
+    if schedule.unit == "day":
+        base = "daily" if schedule.every == 1 else f"every {schedule.every} days"
+        return f"{base} at {schedule.at}"
+    if schedule.unit == "week":
+        base = "weekly" if schedule.every == 1 else f"every {schedule.every} weeks"
+        return f"{base} on {_WEEKDAY_NAMES[schedule.weekday]} at {schedule.at}"
+    return "manual only"
 
 
 @dataclass
