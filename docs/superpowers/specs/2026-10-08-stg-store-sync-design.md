@@ -146,23 +146,31 @@ distinct = 296 ✅; **`QRelID_RVid` distinct = 248 ❌** (has duplicates);
 
 ### 2.8 Pull only the needed variables (probe F9/F10)
 
-`SimpleExport` accepts `variableNames` (optional). The matching rule is
-**whole underscore-separated token**, not exact name and not substring:
+`SimpleExport` accepts `variableNames` (optional). The rule (empirical): the term
+is matched against the **base / question-level variable name**, and the response
+includes that variable's **whole family** — answer-level (`T_*`), loop-expanded
+(`I_*`), and others-specify (`_TEXT`).
 
 | term | result |
 |---|---|
-| `QPM1` | returns `T_QPM1_1`, `T_QPM1_2`, `T_QPM1_3` |
-| `T_QPM1` / `QPM1_2` / `Q42_TEXT` | returns nothing (not a single token) |
-| `Q42` | returns `Q42` |
+| `QPM1` (question var) | `T_QPM1_1`, `T_QPM1_2`, `T_QPM1_3` ✅ |
+| `T_QPM1_2` (answer var) | nothing ❌ |
+| `Q42` | `Q42`, `Q42_TEXT` ✅ |
+| `Q46a` | all `I_*_Q46a` + their `_TEXT` ✅ |
+| `TEXT` (a suffix, not a base) | nothing ❌ |
 
-So an underscore-named var (the key `T_QPM1_2`) cannot be requested directly.
-Measured effect on Link1: `variableNames=QPM1,Q32,SbjNum` → **94 vars/subject**
-(vs 429 full), all needed vars present. ~90 STG metadata vars are always returned
-and are expected. Because the filter is advisory (a term may silently drop), the
-response is **verified** for every needed var, and the result is **projected to the
-configured columns** after the pull — the filter is an optimisation, the
-projection is the source of truth. Fall back to a full export if a needed var
-cannot be produced by any token.
+So the filter must be given the **question-level** name (`QPM1`), **not** the
+answer-level name the store maps (`T_QPM1_1`). Requesting the answer-level name
+silently returns nothing. Measured effect on Link1: `variableNames=QPM1,Q32,SbjNum`
+→ **94 vars/subject** (vs 429 full), and the whole `T_QPM1_*` family is present.
+~90 STG metadata vars are always returned and are expected.
+
+Because the filter is advisory (a term may silently drop), the response is
+**verified** for every needed var, and the result is **projected to the configured
+columns** after the pull — the filter is an optimisation, the projection is the
+source of truth. Fall back to a full export if a needed var cannot be produced by
+any term. The tool derives the pull term from the configured source var(s): strip
+the answer/loop/suffix adornment to the base question name.
 
 ---
 
@@ -407,7 +415,7 @@ store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; preflight-
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
           window_days: 0,          # 0 = full history
           date_type: Upload,       # Upload = server-arrival time
-          variable_names: ["QPM1", "Q32", "SbjNum"] }  # optional token filter (probe F9)
+          variable_names: ["QPM1", "Q32", "SbjNum"] }  # question-level base names (probe F9)
 binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key

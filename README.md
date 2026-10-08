@@ -37,10 +37,11 @@ verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not starte
 
 ### Pull facts (verified live)
 
-- `SimpleExport` accepts `variableNames` (a **token** filter) so only needed
-  variables are pulled — ~4.5× smaller payload. The response is verified and
-  projected to the configured columns; fall back to a full export if a token
-  cannot produce a needed var.
+- `SimpleExport` accepts `variableNames` so only needed families are pulled —
+  ~4.5× smaller payload. Give it the **question-level** base name (`QPM1`, not the
+  answer-level `T_QPM1_2`); it returns the whole family (`T_QPM1_*`, `Q42_TEXT`).
+  The response is verified and projected to the configured columns; fall back to a
+  full export if a needed var cannot be produced.
 - Empty source values are **absent** from the export — treat them as `""` and
   write them; never skip.
 

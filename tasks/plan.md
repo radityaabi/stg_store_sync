@@ -100,12 +100,14 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 ### Phase 3: Data
 
 - [ ] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks with an
-  optional `variableNames` token filter, retry on mid-stream disconnect, flatten
-  EAV → `{Var: Value}` per subject (missing configured var → `""`), **verify**
-  every needed var is present (fall back to full export if not), and **project**
-  to the configured columns.
+  optional `variableNames` filter (derive the **question-level base name** from
+  each configured source var), retry on mid-stream disconnect, flatten EAV →
+  `{Var: Value}` per subject (missing configured var → `""`), **verify** every
+  needed var is present (fall back to full export if not), and **project** to the
+  configured columns.
   - Acceptance: EAV payload flattens correctly with empties as `""`; a filter that
-    drops a needed var triggers fallback; chunking + retry covered by tests.
+    drops a needed var triggers fallback; base-name derivation (`T_QPM1_1`→`QPM1`)
+    covered by tests; chunking + retry covered.
   - Verification: `pytest tests/core/test_fetcher.py`.
   - Deps: 1.3. Files: 2. Scope: M.
 

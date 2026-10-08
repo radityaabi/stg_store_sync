@@ -43,24 +43,37 @@ are distinct; normalisation must be explicit per column.
 | `variableNames` | total vars returned | needed vars present |
 |---|---|---|
 | *(none — default)* | 429 | all |
-| `"T_QPM1_1,T_QPM1_2,T_QPM1_3,Q32,SbjNum"` (exact) | 91 | **T_QPM1_* missing** ❌ |
-| `"QPM1,Q32,SbjNum"` (tokens) | 94 | **all present** ✅ |
+| `"T_QPM1_1,T_QPM1_2,T_QPM1_3,Q32,SbjNum"` (answer-level) | 91 | **T_QPM1_* missing** ❌ |
+| `"QPM1,Q32,SbjNum"` (question-level) | 94 | **all present** ✅ |
 | full + local projection | 429 | all |
 
-**Matching rule (empirical):** the server matches a term against **whole
-underscore-separated tokens** of a var name, not substrings, not exact full names.
+**Matching rule (empirical, corrected):** the term matches the **base /
+question-level variable name**, and the response includes that variable's
+**whole family** — answer-level (`T_*`), loop-expanded (`I_*`), and
+others-specify (`_TEXT`).
 
 | term | returned | why |
 |---|---|---|
-| `QPM1` | `T_QPM1_1`, `T_QPM1_2`, `T_QPM1_3` | `QPM1` is a token of each |
-| `T_QPM1` | none | not a single token |
-| `QPM1_2` | none | not a single token |
-| `Q42` | `Q42` | whole var = whole token |
-| `Q42_TEXT` | none | two tokens — fails |
-| `SbjNam` | `SbjNam` | whole var = whole token |
+| `QPM1` | `T_QPM1_1`, `T_QPM1_2`, `T_QPM1_3` | `QPM1` is the question variable |
+| `T_QPM1_2` | none | answer-level name |
+| `T_QPM1` / `QPM1_2` | none | not a base name |
+| `Q42` | `Q42`, `Q42_TEXT` | base name; family incl. others-specify |
+| `Q46a` | all `I_*_Q46a` + `_TEXT` | base name; loop-expanded family |
+| `TEXT` | none | a suffix, not a base name |
 
-So an **underscore-named** variable (e.g. the key `T_QPM1_2`) **cannot** be
-requested directly — a token term is required.
+XML structure that explains it (question `762`):
+
+```
+<QuestionID>762  ShortID=QPM1  VariableName=QPM1  Text="QPM1. "     ← question level
+   ├─ <STo> VariableName=T_QPM1_1  (answer "Nama")
+   ├─ <STo> VariableName=T_QPM1_2  (answer "Unique ID")
+   └─ <STo> VariableName=T_QPM1_3  (answer "No HP")
+```
+
+So the filter must be given the **question-level** name (`QPM1`), **not** the
+answer-level name the store maps (`T_QPM1_1`). The tool derives the pull term from
+each configured source var by stripping the answer/loop/suffix adornment to the
+base question name.
 
 ## F10. ~90 metadata variables always come
 
