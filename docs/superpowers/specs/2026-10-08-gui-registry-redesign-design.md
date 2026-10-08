@@ -120,14 +120,13 @@ the GUI's Approve gate entirely.
   `blocked`, zero writes, errors recorded.
 - CLI runs the same readiness check; a `blocked` job must exit non-zero.
 
-### 3.4 A4 — Honor `source.window_days` / `date_type` (Important)
+### 3.4 A4 — ~~Honor `source.window_days` / `date_type`~~ (SUPERSEDED)
 
-**Bug.** `sync.py` calls `survey_interview_ids(survey_id)` ignoring the
-configured window. `SourceConfig` already carries `window_days: int` and
-`date_type: str`.
-
-**Fix.** Compute `date_start = now - window_days` when `window_days > 0` and pass
-`date_type` through. `window_days == 0` means "all history".
+**Superseded** by
+`docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`:
+registration carries no time configuration — `SourceConfig` is
+`{ survey_id }` only and every sync pulls full history.
+(`window_days == 0` meant "all history" — that is now the only behavior.)
 
 ### 3.5 A6 — Transport errors are retried/translated; run row always finished (Important)
 
@@ -237,12 +236,17 @@ class RunQueue:
   (and stay tracked); the store is never left in an unknown state — it is a
   point-in-time partial, reported as such.
 
-### 5.3 Scheduler (`core/scheduler.py`)
+### 5.3 Scheduler (`core/scheduler.py`) — superseded (interval model)
 
-- Tick loop (default 30 s) evaluating each **enabled** job's `schedule`.
-- Minute granularity: schedule is a 5-field cron (`* * * * *`) or a helper
-  ("every N minutes"). A job is due when its cron matches the current minute and
-  it has not already run in this minute.
+> **Superseded** by
+> `docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`
+> §4: schedules are structured `Schedule{unit, every, at, weekday}` values
+> (`unit` ""/minute/hour/day/week), stored as 4 columns
+> (`schedule_unit`/`schedule_every`/`schedule_at`/`schedule_weekday`), not cron
+> strings. Legacy cron jobs migrate to manual (`unit=''`).
+
+- Tick loop (default 30 s) evaluating each **enabled** job's `Schedule` via
+  `is_due(schedule, now)`; unit `''` = manual only, never auto-fires.
 - Due job → `RunQueue.enqueue(name, reason="schedule")` (dedupe prevents overlap).
 - No overlap: a job still active/pending is skipped this tick.
 - Manual runs are unaffected by `enabled`; `enabled` gates only the scheduler.
@@ -361,10 +365,10 @@ an `SbjNum` column in STG Studio first) validates the end-to-end path.
 
 ## 10. Deferred (not blockers)
 
-- **Cron format — decided:** a standard **5-field cron** (`* * * * *`), evaluated
-  at minute granularity, fronted by a UI field with a human-readable preview and
-  preset buttons ("every 5 minutes", "hourly", "daily 02:00"). Stored verbatim in
-  `jobs.schedule`; `''` = manual only.
+- **Cron format — superseded:** no cron string. Schedules are the structured
+  interval + anchor model of
+  `docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`
+  (`Schedule{unit, every, at, weekday}`, unit ""/minute/hour/day/week).
 - **Store 17417 adoption (deferred):** add `SbjNum` to the store so identity
   becomes per-interview (currently `ids`/`uniqueID`). Adoption is a documented
   manual STG Studio step for now; a GUI action is a possible follow-up, not in

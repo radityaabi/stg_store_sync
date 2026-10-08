@@ -58,5 +58,14 @@
 ## Phase 6 — Scheduled (optional)
 - [x] 6.1 `cli.py` + filelock — headless sync + run-due + audit log
 
+## Phase 7 — Registration & schedule redesign ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`
+> Plan: `docs/superpowers/plans/2026-10-08-registration-and-schedule-redesign.md`
+- [x] 1 Registration without a window — `SourceConfig` = `{survey_id}`; `window_days`/`date_type` gone; pulls always full history
+- [x] 2 `Schedule` model + registry storage — `Schedule{unit, every, at, weekday}` as 4 columns; legacy cron → manual
+- [x] 3 Scheduler + `human()` — `is_due` ordinal/iso-week rules; human labels
+- [x] 4 UI + CLI surfaces — unit/every/at/weekday editors; labels in dashboard/overview/CLI
+- [x] 5 GUI integration + coverage — schedule tab wiring; visibility tests; 335 tests green
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

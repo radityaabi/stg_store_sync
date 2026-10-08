@@ -183,6 +183,28 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Verification: `pytest tests/test_cli.py`.
   - Deps: 4.3. Files: 2. Scope: M.
 
+### Phase 7: Registration & schedule redesign — ✅ COMPLETE
+
+> **Spec:** `docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`
+> **Plan:** `docs/superpowers/plans/2026-10-08-registration-and-schedule-redesign.md`
+> Supersedes §3.4 A4 / §5.3 / Deferred "Cron format" of the GUI-registry redesign
+> spec and §7.1 `source:` shape of the base spec.
+
+- [x] **Task 1: Registration without a window** — `SourceConfig` is
+  `{ survey_id }` only; `window_days`/`date_type` removed from config/registry/
+  UI/CLI; every sync pulls full history.
+- [x] **Task 2: `Schedule` model + registry storage** —
+  `Schedule{unit, every, at, weekday}` (unit ""/minute/hour/day/week); stored as
+  4 columns (`schedule_unit`/`schedule_every`/`schedule_at`/`schedule_weekday`);
+  legacy cron jobs migrate to manual (`unit=''`).
+- [x] **Task 3: Scheduler + `human()`** — `is_due(schedule, now)` per the spec
+  §4.2 ordinal/iso-week modulo rules; `human()` renders labels.
+- [x] **Task 4: UI + CLI surfaces** — Schedule tab: unit combo + every spin +
+  at/weekday pickers with dynamic visibility; dashboard/overview/CLI show
+  human labels; migration of legacy rows.
+- [x] **Task 5: GUI integration + coverage** — Schedule tab wired to the
+  controller; visibility tests (tab current); 335 tests green.
+
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |

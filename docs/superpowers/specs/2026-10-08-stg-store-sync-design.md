@@ -427,9 +427,9 @@ stg-store-sync/
 job: gran_turismo_link1
 store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; preflight-verified
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
-          window_days: 0,          # 0 = full history
-          date_type: Upload,       # Upload = server-arrival time
           variable_names: ["QPM1", "Q32", "SbjNum"] }  # question-level base names (probe F9)
+# window_days / date_type removed: every sync pulls full history
+# (superseded by 2026-10-08-registration-and-schedule-redesign-design.md)
 binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key
