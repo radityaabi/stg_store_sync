@@ -15,10 +15,21 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from requests.exceptions import (
+    ChunkedEncodingError,
+    ConnectionError as ReqConnectionError,
+    Timeout,
+)
+
 from store_sync.core.planner import Plan
 from store_sync.core.stg_client import STGError
 
 _WRITE_KINDS = {"add", "update", "delete"}
+
+# Transient failures worth retrying: STG API errors plus transport-level
+# failures (dropped connection, timeout, truncated body). Anything else must
+# propagate rather than be silently swallowed.
+_WRITE_RETRYABLE = (STGError, ReqConnectionError, Timeout, ChunkedEncodingError)
 
 
 @dataclass
@@ -70,7 +81,7 @@ def apply_plan(
                 deleted_tags.append((action.match_value, action.id_value))
             else:  # pragma: no cover - guarded above
                 continue
-        except STGError as e:
+        except _WRITE_RETRYABLE as e:
             res.errors.append(f"{action.kind} {action.match_value}: {e}")
             continue
 
@@ -103,7 +114,7 @@ def _retry(fn, *args, max_retries, backoff):
     for attempt in range(1, max(1, max_retries) + 1):
         try:
             return fn(*args)
-        except STGError as e:  # transient server error
+        except _WRITE_RETRYABLE as e:  # transient server/transport error
             last = e
             if attempt < max_retries:
                 time.sleep(backoff * attempt)

@@ -111,115 +111,137 @@ def run_sync(
     dry_run = config.write.dry_run
     run_id = state.start_run(job=config.job, dry_run=dry_run)
 
-    # 1) survey index + pull -------------------------------------------------
-    index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
-    subject_ids = client.survey_interview_ids(
-        config.source.survey_id,
-        date_type=config.source.date_type,
-        date_start=_window_start(config.source.window_days),
-    )
-    match = config.binding.match
-    pulled = pull(
-        client,
-        config.source.survey_id,
-        subject_ids,
-        source_vars=[c.source_var for c in config.binding.columns],
-        match_var=match.source_var if match else None,
-        survey_index=index,
-    )
+    # The run row must never be left with a null status, so every terminal path
+    # funnels through this one-shot finisher. The `finally` is a last resort
+    # for exceptions that bypass the `except` below.
+    finished = False
 
-    # 2) load the store ------------------------------------------------------
-    store_rows = client.get_store(config.store.id)
-    store_columns = sorted({k for r in store_rows for k in r})
-
-    # readiness preconditions (computed early; acted on before any write). We
-    # defer the block until after conflict recording so the run log stays
-    # complete for store-side duplicates the planner already flags.
-    readiness_errs = _readiness_errors(config, store_rows)
-
-    # 3) plan ----------------------------------------------------------------
-    tracked = state.tracked_keys(config.job)
-    p = plan(
-        store_rows=store_rows,
-        source_records=pulled.records,
-        match=match,
-        columns=config.binding.columns,
-        id_column=config.store.id_column,
-        store_columns=store_columns,
-        delete_policy=config.write.delete_policy,
-        tracked=tracked,
-    )
-
-    # record conflicts/quarantine (always, dry-run included)
-    for action in p.actions:
-        if action.kind == "conflict":
-            state.record_conflict(run_id, match_value=action.match_value, reason=action.reason)
-    for rec in p.quarantined:
-        state.record_conflict(
-            run_id,
-            match_value=rec.get(match.source_var) if match else None,
-            reason="missing match key in source",
-        )
+    def _finish(status_: str, counts_: dict) -> None:
+        nonlocal finished
+        if not finished:
+            state.finish_run(run_id, status=status_, counts=counts_)
+            finished = True
 
     errors: list[str] = []
+    p = Plan()
 
-    # 4) fail-closed readiness gate (before any write) -----------------------
-    if readiness_errs:
-        for err in readiness_errs:
-            state.record_conflict(run_id, match_value=None, reason=err)
-        state.finish_run(run_id, status="blocked", counts={})
-        return SyncResult(
-            plan=p, dry_run=dry_run, status="blocked", counts={},
-            errors=list(readiness_errs), run_id=run_id,
+    try:
+        # 1) survey index + pull ---------------------------------------------
+        index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
+        subject_ids = client.survey_interview_ids(
+            config.source.survey_id,
+            date_type=config.source.date_type,
+            date_start=_window_start(config.source.window_days),
+        )
+        match = config.binding.match
+        pulled = pull(
+            client,
+            config.source.survey_id,
+            subject_ids,
+            source_vars=[c.source_var for c in config.binding.columns],
+            match_var=match.source_var if match else None,
+            survey_index=index,
         )
 
-    # 4b) fail-closed on store-side conflicts --------------------------------
-    if p.blocked:
-        errors.extend(a.reason for a in p.actions if a.kind == "conflict")
-        state.finish_run(run_id, status="blocked", counts=p.counts)
-        return SyncResult(plan=p, dry_run=dry_run, status="blocked",
-                          counts=p.counts, errors=errors, run_id=run_id)
+        # 2) load the store --------------------------------------------------
+        store_rows = client.get_store(config.store.id)
+        store_columns = sorted({k for r in store_rows for k in r})
 
-    # source-side duplicates are skipped but the run continues; when any non-
-    # conflicting writes were applied the run is `partial`, not `ok` (§3.2).
-    skipped_source = any(
-        a.kind == "conflict" and a.side == "source" for a in p.actions
-    )
+        # readiness preconditions (computed early; acted on before any write).
+        # We defer the block until after conflict recording so the run log stays
+        # complete for store-side duplicates the planner already flags.
+        readiness_errs = _readiness_errors(config, store_rows)
 
-    # 5) apply ---------------------------------------------------------------
-    wres = apply_plan(
-        client,
-        config.store.id,
-        p,
-        dry_run=dry_run,
-        throttle=throttle,
-        max_retries=max_retries,
-        backoff=backoff,
-        id_column=config.store.id_column,
-    )
-    errors.extend(wres.errors)
+        # 3) plan ------------------------------------------------------------
+        tracked = state.tracked_keys(config.job)
+        p = plan(
+            store_rows=store_rows,
+            source_records=pulled.records,
+            match=match,
+            columns=config.binding.columns,
+            id_column=config.store.id_column,
+            store_columns=store_columns,
+            delete_policy=config.write.delete_policy,
+            tracked=tracked,
+        )
 
-    # 6) tracking (only real writes) -----------------------------------------
-    if not dry_run:
-        for action in wres.applied:
-            if action.kind == "delete":
-                state.untrack_row(job=config.job, match_value=action.match_value)
-            else:
-                state.track_row(
-                    job=config.job,
-                    match_value=action.match_value,
-                    row_hash=state.row_hash(action.payload),
-                )
+        # record conflicts/quarantine (always, dry-run included)
+        for action in p.actions:
+            if action.kind == "conflict":
+                state.record_conflict(run_id, match_value=action.match_value, reason=action.reason)
+        for rec in p.quarantined:
+            state.record_conflict(
+                run_id,
+                match_value=rec.get(match.source_var) if match else None,
+                reason="missing match key in source",
+            )
 
-    if errors:
-        status = "partial" if wres.applied else "error"
-    elif skipped_source and wres.applied:
-        status = "partial"
-    else:
-        status = "ok"
+        # 4) fail-closed readiness gate (before any write) -------------------
+        if readiness_errs:
+            for err in readiness_errs:
+                state.record_conflict(run_id, match_value=None, reason=err)
+            _finish("blocked", {})
+            return SyncResult(
+                plan=p, dry_run=dry_run, status="blocked", counts={},
+                errors=list(readiness_errs), run_id=run_id,
+            )
 
-    state.finish_run(run_id, status=status, counts=wres.counts)
-    return SyncResult(
-        plan=p, dry_run=dry_run, status=status, counts=wres.counts,
-        errors=errors, run_id=run_id,
-    )
+        # 4b) fail-closed on store-side conflicts ----------------------------
+        if p.blocked:
+            errors.extend(a.reason for a in p.actions if a.kind == "conflict")
+            _finish("blocked", p.counts)
+            return SyncResult(plan=p, dry_run=dry_run, status="blocked",
+                              counts=p.counts, errors=errors, run_id=run_id)
+
+        # source-side duplicates are skipped but the run continues; when any
+        # non-conflicting writes were applied the run is `partial`, not `ok`.
+        skipped_source = any(
+            a.kind == "conflict" and a.side == "source" for a in p.actions
+        )
+
+        # 5) apply -----------------------------------------------------------
+        wres = apply_plan(
+            client,
+            config.store.id,
+            p,
+            dry_run=dry_run,
+            throttle=throttle,
+            max_retries=max_retries,
+            backoff=backoff,
+            id_column=config.store.id_column,
+        )
+        errors.extend(wres.errors)
+
+        # 6) tracking (only real writes) -------------------------------------
+        if not dry_run:
+            for action in wres.applied:
+                if action.kind == "delete":
+                    state.untrack_row(job=config.job, match_value=action.match_value)
+                else:
+                    state.track_row(
+                        job=config.job,
+                        match_value=action.match_value,
+                        row_hash=state.row_hash(action.payload),
+                    )
+
+        if errors:
+            status = "partial" if wres.applied else "error"
+        elif skipped_source and wres.applied:
+            status = "partial"
+        else:
+            status = "ok"
+
+        _finish(status, wres.counts)
+        return SyncResult(
+            plan=p, dry_run=dry_run, status=status, counts=wres.counts,
+            errors=errors, run_id=run_id,
+        )
+    except Exception as e:  # noqa: BLE001 - guarantee a finished run
+        errors.append(f"unexpected error: {e}")
+        _finish("error", {})
+        return SyncResult(
+            plan=p, dry_run=dry_run, status="error", counts={},
+            errors=errors, run_id=run_id,
+        )
+    finally:
+        _finish("error", {})

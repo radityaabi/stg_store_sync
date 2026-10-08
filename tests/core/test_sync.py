@@ -194,6 +194,18 @@ class TestConflicts:
         assert res.status in ("partial", "error")
 
 
+def test_transport_error_leaves_run_finished(st):
+    import requests
+    class Boom(FakeClient):
+        def update_row(self, store_id, values):
+            raise requests.ConnectionError("dropped")
+    c = Boom(store=store_rows(), subjects=subjects())
+    run_sync(config(dry_run=False), client=c, state=st, backoff=0)
+    run = st.recent_runs("link1")[0]
+    assert run["status"] in ("partial", "error")
+    assert run["finished_at"] is not None
+
+
 class TestPull:
     def test_uses_derived_filter(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())

@@ -20,6 +20,7 @@ class FakeClient:
         self.fail_on = fail_on or set()
         self.fail_times = fail_times
         self._failures = 0
+        self._exception = STGError("transient")
         self._rows = list(store_after or [])
 
     def add_row(self, store_id, values):
@@ -38,7 +39,7 @@ class FakeClient:
         self.calls.append((name, store_id, values))
         if name in self.fail_on and self._failures < self.fail_times:
             self._failures += 1
-            raise STGError("transient")
+            raise self._exception
         if name == "delete_row":
             self._rows = [r for r in self._rows if str(r.get("No")) != str(tag)]
         return {"Done": True}
@@ -147,6 +148,17 @@ class TestRetry:
         res = apply_plan(c, 17620, p, dry_run=False, max_retries=2, backoff=0)
         assert res.counts.get("add", 0) == 0
         assert len(res.errors) == 1
+
+
+class TestTransportRetry:
+    def test_retries_transport_error(self):
+        import requests
+        c = FakeClient(fail_on={"update_row"}, fail_times=1)
+        # make the failure a transport error instead of STGError
+        c._exception = requests.ConnectionError("dropped")
+        p = plan_with(Action("update", "2", "No", 2, {"No": 2}))
+        res = apply_plan(c, 17620, p, dry_run=False, max_retries=3, backoff=0)
+        assert res.counts["update"] == 1
 
 
 class TestThrottle:
