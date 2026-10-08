@@ -410,9 +410,9 @@ def test_preflight_returns_immediately(tmp_path, monkeypatch):
     client = _BlockingClient(release, calls)
     monkeypatch.setattr(c, "_client", lambda: client)
 
-    def fake_preflight(job, cl):
+    def fake_preflight(job, client):
         # Actually block on the (fake) network so a sync slot would hang.
-        cl.get_store(job.store.id)
+        client.get_store(job.store.id)
         return _Report(), {}
 
     monkeypatch.setattr(gui, "run_preflight", fake_preflight)
@@ -531,5 +531,131 @@ def test_mapping_export_off_thread(tmp_path, monkeypatch):
         time.sleep(0.01)
     QCoreApplication.processEvents()
     assert written and written[0][0] == "m.xlsx"
+    c.stop()
+    w.close()
+
+
+# -- Important 4 (round 2): worker ownership / re-entrancy / GUI delivery ----
+
+def _arm_preflight(c, w, monkeypatch, release, calls):
+    """Wire a blocking preflight worker onto `c` and return the imported module."""
+    import store_sync.gui as gui
+
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    monkeypatch.setattr(c, "_client", lambda: _BlockingClient(release, calls))
+
+    def fake_preflight(job, client):
+        client.get_store(job.store.id)  # blocks until `release` is set
+        return _Report(), {}
+
+    monkeypatch.setattr(gui, "run_preflight", fake_preflight)
+    return gui
+
+
+def _drain(c, attr, timeout=3.0):
+    """Spin the event loop until the `attr` slot worker stops running."""
+    deadline = time.monotonic() + timeout
+    worker = getattr(c, attr)
+    while (
+        time.monotonic() < deadline
+        and worker is not None
+        and worker.isRunning()
+    ):
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+
+
+def test_stop_midflight_joins_unbounded_without_abort(tmp_path, monkeypatch):
+    """`stop()` must join a running worker (never drop its last ref → abort)."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    release = threading.Event()
+    calls: list = []
+    _arm_preflight(c, w, monkeypatch, release, calls)
+
+    c._preflight()
+    worker = c._preflight_thread
+    assert worker is not None and worker.isRunning()
+    # The strong-ref container keeps the running QThread alive (invariant).
+    assert worker in c._workers
+
+    done = {}
+
+    def do_stop():
+        c.stop()
+        done["stopped"] = True
+
+    th = threading.Thread(target=do_stop)
+    th.start()
+    time.sleep(0.2)
+    # Unbounded join: still blocked on the in-flight request, not abandoned.
+    assert "stopped" not in done
+    assert c._preflight_thread is worker
+
+    release.set()  # let the client's own call return
+    th.join(5)
+    assert done.get("stopped") is True
+    assert not worker.isRunning()
+    assert c._preflight_thread is None
+    assert c._workers == set()
+    w.close()
+
+
+def test_reentrant_preflight_does_not_block_gui(tmp_path, monkeypatch):
+    """A second click while in flight returns at once with a busy status."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    release = threading.Event()
+    calls: list = []
+    _arm_preflight(c, w, monkeypatch, release, calls)
+
+    c._preflight()
+    first = c._preflight_thread
+    assert first is not None and first.isRunning()
+
+    start = time.monotonic()
+    c._preflight()  # re-entrant click on the GUI thread
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.5  # did not join/block on the in-flight fetch
+    assert "already running" in w.status_label.text().lower()
+    assert c._preflight_thread is first  # not joined + replaced
+    assert first.isRunning()
+
+    release.set()
+    _drain(c, "_preflight_thread")
+    c.stop()
+    w.close()
+
+
+def test_preflight_result_delivered_on_gui_thread(tmp_path, monkeypatch):
+    """The worker's `ok` slot must run on the GUI (main) thread."""
+    import store_sync.gui as gui
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+
+    ready = threading.Event()
+    ready.set()  # non-blocking fake client
+    monkeypatch.setattr(c, "_client", lambda: _BlockingClient(ready, []))
+    monkeypatch.setattr(gui, "run_preflight", lambda job, client: (_Report(), {}))
+
+    seen: dict = {}
+    main_ident = threading.get_ident()
+
+    def record(result):
+        seen["ident"] = threading.get_ident()
+        Controller._on_preflight_ok(c, result)
+
+    monkeypatch.setattr(c, "_on_preflight_ok", record)
+
+    c._preflight()
+    _drain(c, "_preflight_thread")
+
+    assert seen.get("ident") == main_ident  # delivered on the GUI thread
+    assert "preflight ok" in w.status_label.text().lower()
     c.stop()
     w.close()

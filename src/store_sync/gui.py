@@ -169,10 +169,14 @@ class Controller:
         self._stopped = False
         self._active_prev: str | None = None
 
-        # In-flight off-thread network workers (preflight / mapping pool). Joined
-        # in `stop()`; also referenced so the QThread isn't GC'd mid-run.
+        # In-flight off-thread network workers (preflight / mapping pool). The
+        # `_preflight_thread`/`_mapping_thread` attrs are "the current worker for
+        # this slot" (status/busy checks); `_workers` is the strong-reference
+        # container that guarantees a running QThread is never GC'd mid-run. Each
+        # worker is discarded on its `finished` signal; all are joined in `stop()`.
         self._preflight_thread: QThread | None = None
         self._mapping_thread: QThread | None = None
+        self._workers: set[QThread] = set()
 
         self._bridge = _QueueBridge()
         self._bridge.changed.connect(self._on_queue_changed)
@@ -252,17 +256,48 @@ class Controller:
         self._local = threading.local()
 
     def _join_worker(self, attr: str) -> None:
-        """Join + clear one off-thread network worker (idempotent)."""
-        worker = getattr(self, attr)
-        if worker is not None:
-            worker.wait(5000)
-            setattr(self, attr, None)
+        """Join every off-thread network worker (unbounded) + clear the slots.
 
-    def _start_worker(self, attr: str, worker: _NetworkWorker) -> None:
-        """Replace (+ join) any in-flight worker on `attr`, then start `worker`."""
-        self._join_worker(attr)
+        The wait is deliberately **unbounded**: a running QThread must never be
+        left unreferenced (AGENTS §3.4), and dropping the last ref mid-run aborts
+        the process (`QThread: Destroyed while thread is still running`). The
+        in-flight request is bounded by the client's own timeout (120 s fetch /
+        300 s export), so `stop()`/close blocks until it returns or times out —
+        the safe, honest tradeoff. The `attr` argument is kept for call-site
+        compatibility but the container is the authoritative set.
+        """
+        for worker in list(self._workers):
+            worker.wait()
+        self._workers.clear()
+        self._preflight_thread = None
+        self._mapping_thread = None
+
+    def _reap_worker(self, worker: _NetworkWorker) -> None:
+        """Drop a finished worker from the strong-ref container (keep slot attr).
+
+        The slot attr still points at the worker so status/busy checks and the
+        existing poll loops can observe it; only the GC guarantee is released.
+        """
+        self._workers.discard(worker)
+
+    def _start_worker(
+        self, attr: str, worker: _NetworkWorker, *, label: str
+    ) -> bool:
+        """Start `worker` unless the `attr` slot is busy (never blocks the GUI).
+
+        A re-entrant click while a fetch is in flight must return immediately
+        with an informational status — joining here would freeze the GUI for the
+        client's full timeout. Returns True if `worker` was started.
+        """
+        current = getattr(self, attr)
+        if current is not None and current.isRunning():
+            self.window.set_status(f"{label} already running", _STATUS_WARN)
+            return False
         setattr(self, attr, worker)
+        self._workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._reap_worker(w))
         worker.start()
+        return True
 
     # -- public API --------------------------------------------------------
 
@@ -601,7 +636,7 @@ class Controller:
         worker = _NetworkWorker(work)
         worker.ok.connect(self._on_preflight_ok)
         worker.failed.connect(self._on_preflight_error)
-        self._start_worker("_preflight_thread", worker)
+        self._start_worker("_preflight_thread", worker, label="preflight")
 
     def _on_preflight_ok(self, result) -> None:
         w = self.window
@@ -665,7 +700,7 @@ class Controller:
         worker = _NetworkWorker(work)
         worker.ok.connect(self._on_import_ok)
         worker.failed.connect(self._on_import_error)
-        self._start_worker("_mapping_thread", worker)
+        self._start_worker("_mapping_thread", worker, label="import")
 
     def _on_import_ok(self, result) -> None:
         w = self.window
@@ -704,7 +739,7 @@ class Controller:
         worker = _NetworkWorker(work)
         worker.ok.connect(self._on_export_ok)
         worker.failed.connect(self._on_export_error)
-        self._start_worker("_mapping_thread", worker)
+        self._start_worker("_mapping_thread", worker, label="export")
 
     def _on_export_ok(self, path) -> None:
         self.window.set_status(f"template written: {path}", _STATUS_OK)
