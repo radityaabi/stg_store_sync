@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stg-store-sync"
+version = "0.1.0"
+description = "Sync SurveyToGo interview data into a Subject Store (External List) via the STG REST API."
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6",
+    "requests",
+    "python-dotenv",
+    "filelock",
+    "PyYAML",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+stg-store-sync = "store_sync.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

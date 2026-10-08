@@ -1,0 +1,22 @@
+# Secrets & local state
+.env
+*.sqlite
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local scratch
+data/
