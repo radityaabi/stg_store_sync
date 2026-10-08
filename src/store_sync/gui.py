@@ -126,6 +126,8 @@ class Controller:
     def _state(self) -> State:
         st = getattr(self._local, "state", None)
         if st is None:
+            if self._stopped:
+                raise RuntimeError("controller stopped")
             st = State(self._db_path)
             _enable_wal(st.conn)
             self._local.state = st
@@ -136,6 +138,8 @@ class Controller:
     def _registry(self) -> Registry:
         reg = getattr(self._local, "registry", None)
         if reg is None:
+            if self._stopped:
+                raise RuntimeError("controller stopped")
             reg = Registry(self._db_path)
             _enable_wal(reg.conn)
             self._local.registry = reg
@@ -222,15 +226,10 @@ class Controller:
 
     def _default_run_fn(self, name: str, should_stop):
         """Build a client from the environment, load the job, run one sync."""
-        import os
-
         job = self.registry.get(name)
-        client = STGClient(
-            server=os.environ.get("STG_SERVER", ""),
-            user=os.environ.get("STG_USER", ""),
-            password=os.environ.get("STG_PASSWORD", ""),
-        )
+        client = None
         try:
+            client = self._client()
             return run_sync(
                 job,
                 client=client,
@@ -239,7 +238,8 @@ class Controller:
                 throttle=0.05,
             )
         finally:
-            self._close_client(client)
+            if client is not None:
+                self._close_client(client)
 
     def _client(self) -> STGClient:
         import os
@@ -432,15 +432,17 @@ class Controller:
             w.set_status("config error", "#f87171")
             return
         w.set_status("preflight...", "#fbbf24")
-        client = self._client()
+        client = None
         try:
+            client = self._client()
             report, pull_terms = run_preflight(job, client=client)
         except Exception:  # noqa: BLE001 - surface any failure to operator
             logger.exception("controller: preflight failed")
             w.set_status("preflight error", "#f87171")
             return
         finally:
-            self._close_client(client)
+            if client is not None:
+                self._close_client(client)
         rows = [
             {
                 "column": r.source_var,
@@ -461,8 +463,9 @@ class Controller:
     def _mapping_pool(self, job: JobConfig) -> tuple[list[str], list[str]]:
         from store_sync.core.fetcher import parse_survey_index
 
-        client = self._client()
+        client = None
         try:
+            client = self._client()
             store_cols = sorted(
                 {k for r in client.get_store(job.store.id) for k in r}
             )
@@ -470,7 +473,8 @@ class Controller:
                 parse_survey_index(client.get_survey_xml(job.source.survey_id)).keys()
             )
         finally:
-            self._close_client(client)
+            if client is not None:
+                self._close_client(client)
         return store_cols, source_vars
 
     def _import_mapping(self) -> None:

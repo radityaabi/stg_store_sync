@@ -178,6 +178,46 @@ def test_save_bad_config_reports_error(tmp_path):
     w.close()
 
 
+def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
+    """`_client()` raising (no STG_SERVER) must not escape the preflight slot."""
+    monkeypatch.delenv("STG_SERVER", raising=False)
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    from store_sync.core.registry import JobEntry
+
+    entry = JobEntry(
+        name="a", store_id=17620, id_column="No", survey_id="SURV",
+        match_source_var="SbjNum", match_store_col="SbjNum", window_days=0,
+        date_type="Upload", delete_policy="full_history", dry_run=True,
+        enabled=False, schedule="", column_count=1, last_status=None,
+        last_finished_at=None,
+    )
+    w.job_detail.load(entry, a_job())
+    c._preflight()  # must not raise; client construction fails before any request
+    assert "error" in w.status_label.text().lower()
+    assert "#f87171" in w.status_label.styleSheet()
+    c.stop()
+    w.close()
+
+
+def test_connections_refused_after_stop(tmp_path):
+    """A lazy connection request after `stop()` must not leak a tracked conn."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.start()
+    c.stop()
+    for factory in (c._state, c._registry):
+        try:
+            factory()
+        except RuntimeError:
+            pass
+        else:  # pragma: no cover - a returned conn would be a leak
+            raise AssertionError("factory returned a connection after stop()")
+    assert c._conns == []
+    w.close()
+
+
 def c_state_get(path, run_id):
     """Read a run row with a fresh connection (no shared-thread issues)."""
     from store_sync.core.state import State
