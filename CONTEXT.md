@@ -144,8 +144,8 @@ The single global worker that runs jobs one at a time, with cooperative stop.
 _Avoid_: worker pool, thread pool.
 
 **Scheduler**:
-The in-process tick loop that enqueues enabled jobs when their cron schedule is
-due (minute granularity).
+The in-process tick loop that enqueues enabled jobs when their interval
+`Schedule` (minute/hour/day/week) is due.
 _Avoid_: cron, daemon.
 
 **Readiness gate** (preflight):

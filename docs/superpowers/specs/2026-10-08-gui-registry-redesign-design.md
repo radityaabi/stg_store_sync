@@ -299,7 +299,7 @@ gui.py               # Controller: owns Registry + RunQueue + threads; wiring
 
 ### 6.2 Store detail (`job_detail`)
 
-- **Config:** store id, id col, survey id, match vars, window/date, delete policy,
+- **Config:** store id, id col, survey id, match vars, delete policy,
   dry-run.
 - **Columns:** `QTableView` bound to `JobTableModel`. Columns: *Store column* ·
   *Source variable* · *Pull term (read-only)* · *Kind*. **Edits go through the

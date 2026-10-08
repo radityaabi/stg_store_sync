@@ -111,6 +111,7 @@ class JobDialog(QDialog):
         root = QVBoxLayout(self)
 
         form = QFormLayout()
+        self._form = form
         self.name_edit = QLineEdit()
         form.addRow("Name", self.name_edit)
         self.store_id_edit = QLineEdit()
@@ -246,6 +247,15 @@ class JobDialog(QDialog):
             at_widgets=[self.schedule_at_edit],
             weekday_widgets=[self.schedule_weekday_combo],
         )
+        # QFormLayout does NOT auto-hide row labels — toggle them ourselves.
+        for w, visible in (
+            (self.schedule_at_edit, self.schedule_at_edit.isVisibleTo(self)),
+            (self.schedule_weekday_combo,
+             self.schedule_weekday_combo.isVisibleTo(self)),
+        ):
+            label = self._form.labelForField(w)
+            if label is not None:
+                label.setVisible(visible)
 
     def entry_fields(self) -> dict:
         return {

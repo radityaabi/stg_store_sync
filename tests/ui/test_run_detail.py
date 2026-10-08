@@ -188,6 +188,24 @@ def test_job_dialog_schedule_fields_follow_unit():
     assert dlg.schedule_weekday_combo.isVisibleTo(dlg) is True
 
 
+def test_job_dialog_schedule_row_labels_follow_unit():
+    dlg = JobDialog()
+    dlg.show()
+    at_label = dlg._form.labelForField(dlg.schedule_at_edit)
+    weekday_label = dlg._form.labelForField(dlg.schedule_weekday_combo)
+    assert at_label is not None and weekday_label is not None
+    dlg.schedule_unit_combo.setCurrentIndex(
+        dlg.schedule_unit_combo.findData("minute"))
+    assert at_label.isHidden() is True
+    assert weekday_label.isHidden() is True
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("day"))
+    assert at_label.isHidden() is False
+    assert weekday_label.isHidden() is True
+    dlg.schedule_unit_combo.setCurrentIndex(dlg.schedule_unit_combo.findData("week"))
+    assert at_label.isHidden() is False
+    assert weekday_label.isHidden() is False
+
+
 def test_job_dialog_schedule_every_spin_range_follows_unit_and_clamps():
     dlg = JobDialog()
     dlg.schedule_unit_combo.setCurrentIndex(
