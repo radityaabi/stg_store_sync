@@ -453,7 +453,7 @@ write:
   get_store + sample export → binding.preflight → USER APPROVE → persist binding
 
 [each Sync / tick]
-  fetcher.pull(survey, window, dateType=Upload, variableNames=<tokens>)
+  fetcher.pull(survey, variableNames=<tokens>)   # full history; no window/dateType
     └─ flatten EAV → per-subject {var: value}   (missing configured var → "")
     └─ VERIFY every needed var is present; else fall back to full export
     └─ PROJECT to the configured columns (source of truth)

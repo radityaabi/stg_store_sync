@@ -56,7 +56,9 @@ run without leaving orphaned threads or half-written-store surprises.
 **Constraints (agreed in this session):**
 
 1. Full momo-style navigation (dashboard → store → run).
-2. In-app cron, **minute granularity** ("* * * * *" style / "every N minutes").
+2. In-app scheduler, **per-list interval schedules** (minute/hour/day/week —
+   superseded from cron/minute granularity; see
+   `2026-10-08-registration-and-schedule-redesign-design.md`).
 3. **Single global run queue** — one store syncs at a time; others wait. Stop
    cancels the active run and marks it `cancelled`.
 4. Registry persisted in **SQLite**, extending the existing `state.db`.
@@ -152,7 +154,14 @@ registration carries no time configuration — `SourceConfig` is
 
 ---
 
-## 4. Registry (persistence)
+## 4. Registry (persistence) — schema block superseded
+
+> **Schema + API below superseded in part** by
+> `docs/superpowers/specs/2026-10-08-registration-and-schedule-redesign-design.md`:
+> `window_days`/`date_type` columns are dropped (registration carries no time
+> config); `schedule TEXT` (cron) is replaced by the 4 structured columns
+> `schedule_unit`/`schedule_every`/`schedule_at`/`schedule_weekday`; API
+> signatures are `Schedule`-typed, not cron strings. Kept for history.
 
 Same SQLite file as `State` (`~/.stg_store_sync/state.db`). New tables, managed
 by a new `core/registry.py: Registry` (separate class, same file; `State` keeps
@@ -191,13 +200,17 @@ CREATE TABLE IF NOT EXISTS job_columns (
 
 | Method | Purpose |
 |---|---|
-| `add(job: JobConfig, *, schedule: str, enabled: bool) -> int` | insert + columns (transactional) |
+| `add(job: JobConfig, *, schedule: Schedule, enabled: bool) -> int` | insert + columns (transactional) |
 | `update(name, job, *, schedule, enabled)` | replace config + columns |
 | `delete(name)` | remove job + columns (keep run history) |
 | `get(name) -> JobConfig` (+ schedule/enabled) | reconstruct |
 | `list() -> list[JobEntry]` | dashboard rows (incl. last run join) |
 | `names()` | CLI enumerate |
-| `set_enabled(name, bool)` / `set_schedule(name, cron)` | quick toggles |
+| `set_enabled(name, bool)` / `set_schedule(name, schedule)` | quick toggles |
+
+(`schedule` is the `Schedule{unit, every, at, weekday}` value of the redesign
+spec — `set_schedule(name, cron)` above was the pre-redesign cron form, kept for
+history.)
 
 `JobEntry` = config summary + `enabled` + `schedule` + last run (`status`,
 `finished_at`, `counts`) joined from `runs` by `run.job = jobs.name`.
@@ -291,8 +304,9 @@ gui.py               # Controller: owns Registry + RunQueue + threads; wiring
 - **Columns:** `QTableView` bound to `JobTableModel`. Columns: *Store column* ·
   *Source variable* · *Pull term (read-only)* · *Kind*. **Edits go through the
   model** (fix #5). Import/Export `.xlsx` buttons wired to `mapping_io`.
-- **Schedule:** enabled checkbox + cron field (minute granularity) with a human
-  preview ("every 5 minutes").
+- **Schedule:** enabled checkbox + unit combo (""/minute/hour/day/week) + every
+  spin + at/weekday pickers (dynamic visibility) with a human preview
+  (`Schedule.human()`).
 - **History:** runs for this store (from `State.recent_runs`), double-click → Run
   detail.
 - **Conflicts:** latest conflicts for this store.
@@ -339,8 +353,8 @@ TDD throughout; the existing suite (182) must stay green.
   and that no write after the stop point is issued.
 - **Registry (§4):** CRUD round-trip → `JobConfig` equivalence; unique name;
   cascade delete of columns; last-run join.
-- **Queue/scheduler (§5):** dedupe; single-active invariant; cron "due" matching
-  at minute granularity; no overlap while active.
+- **Queue/scheduler (§5):** dedupe; single-active invariant; interval "due"
+  matching (`is_due(Schedule, now)`); no overlap while active.
 - **GUI (§6):** offscreen `QApplication`. Assert `QTableView` edits reach the
   model (regression for #5); dashboard row → detail navigation; Stop sets the
   Event; `closeEvent` stops threads (no `QThread: Destroyed while running`).
