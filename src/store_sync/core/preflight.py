@@ -68,6 +68,9 @@ def preflight(
 ) -> PreflightReport:
     rep = PreflightReport()
 
+    if not store_rows:
+        rep.errors.append("store has no rows")
+
     # per-column review table ------------------------------------------------
     configured = config.binding.columns
     match = config.binding.match

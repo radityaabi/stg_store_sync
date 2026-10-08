@@ -55,6 +55,15 @@ class TestLoad:
 
 
 class TestMain:
+    def test_exit_code_blocked_is_nonzero_distinct(self):
+        from store_sync.cli import _exit_for
+
+        assert _exit_for("ok") == 0
+        assert _exit_for("blocked") != 0
+        assert _exit_for("blocked") == 2
+        assert _exit_for("partial") != 0
+        assert _exit_for("error") != 0
+
     def test_dry_run_missing_env_errors_cleanly(self, tmp_path, monkeypatch, capsys):
         monkeypatch.delenv("STG_SERVER", raising=False)
         monkeypatch.delenv("STG_USER", raising=False)

@@ -106,7 +106,7 @@ class TestApply:
     def test_delete_uses_tag_value_then_verifies(self):
         c = FakeClient(store_after=[{"No": 1}, {"No": 2}, {"No": 3}])
         p = plan_with(Action("delete", "3", "No", 3, {}))
-        res = apply_plan(c, 17620, p, dry_run=False)
+        res = apply_plan(c, 17620, p, dry_run=False, id_column="No")
         deletes = [x for x in c.calls if x[0] == "delete_row"]
         assert deletes[0] == ("delete_row", 17620, 3)
         # tag 3 was present and is now gone -> verified
@@ -116,9 +116,15 @@ class TestApply:
     def test_delete_not_verified_when_row_survives(self):
         c = StubbornClient(rows=[{"No": 3}])
         p = plan_with(Action("delete", "3", "No", 3, {}))
-        res = apply_plan(c, 17620, p, dry_run=False)
+        res = apply_plan(c, 17620, p, dry_run=False, id_column="No")
         assert 3 in res.unverified_deletes
         assert res.errors
+
+    def test_unknown_id_column_does_not_verify_with_hardcoded_No(self):
+        c = FakeClient(store_after=[{"No": 3}])
+        p = plan_with(Action("delete", "3", "No", 3, {}))
+        res = apply_plan(c, 17620, p, dry_run=False, id_column=None)
+        assert any("id column unknown" in e for e in res.errors)
 
     def test_same_actions_skipped(self):
         c = FakeClient()
@@ -173,7 +179,7 @@ class TestTransportRetry:
             Action("update", "2", "No", 2, {"No": 2}),
             Action("delete", "3", "No", 3, {}),
         )
-        res = apply_plan(c, 17620, p, dry_run=False, max_retries=2, backoff=0)
+        res = apply_plan(c, 17620, p, dry_run=False, max_retries=2, backoff=0, id_column="No")
         # must return normally, preserving the applied add/update counts
         assert res.counts["add"] == 1
         assert res.counts["update"] == 1

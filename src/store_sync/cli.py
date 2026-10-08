@@ -25,6 +25,15 @@ from store_sync.core.sync import run_sync
 DEFAULT_STATE = "state.db"
 
 
+def _exit_for(status: str) -> int:
+    """Process exit code for a run status (spec §7): blocked is its own code."""
+    if status == "ok":
+        return 0
+    if status == "blocked":
+        return 2
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="stg-store-sync-cli",
@@ -102,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         for e in res.errors:
             print(f"  ! {e}", file=sys.stderr)
 
-    return 0 if res.status in ("ok", "blocked") else 1
+    return _exit_for(res.status)
 
 
 if __name__ == "__main__":

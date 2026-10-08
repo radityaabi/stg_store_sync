@@ -90,25 +90,29 @@ def apply_plan(
         res.counts[action.kind] = res.counts.get(action.kind, 0) + 1
 
     # Verify deletes by re-reading the store (F4: DeleteRow always says Done).
+    # With no declared id column we cannot map a tag back to a row: report it
+    # explicitly rather than guessing a column name.
     if deleted_tags:
-        id_col = id_col or "No"
-        try:
-            actual = _retry(
-                client.get_store, store_id,
-                max_retries=max_retries, backoff=backoff,
-            )
-        except _WRITE_RETRYABLE as e:
-            # A dropped re-read must not escape: the writes already applied
-            # stand, and we simply cannot confirm the deletes this run.
-            res.errors.append(f"delete verification failed: {e}")
-            for _match_value, tag in deleted_tags:
-                res.unverified_deletes.append(tag)
+        if id_column is None:
+            res.errors.append("id column unknown; delete verification skipped")
         else:
-            present = {str(r.get(id_col)) for r in actual}
-            for match_value, tag in deleted_tags:
-                if str(tag) in present:
+            try:
+                actual = _retry(
+                    client.get_store, store_id,
+                    max_retries=max_retries, backoff=backoff,
+                )
+            except _WRITE_RETRYABLE as e:
+                # A dropped re-read must not escape: the writes already applied
+                # stand, and we simply cannot confirm the deletes this run.
+                res.errors.append(f"delete verification failed: {e}")
+                for _match_value, tag in deleted_tags:
                     res.unverified_deletes.append(tag)
-                    res.errors.append(f"delete {match_value!r} (tag {tag}) not verified")
+            else:
+                present = {str(r.get(id_column)) for r in actual}
+                for match_value, tag in deleted_tags:
+                    if str(tag) in present:
+                        res.unverified_deletes.append(tag)
+                        res.errors.append(f"delete {match_value!r} (tag {tag}) not verified")
 
     return res
 

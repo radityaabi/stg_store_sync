@@ -66,11 +66,26 @@ class TestParse:
         p = self._write(tmp_path, [["I7_1_2", "T_QPM1_1"], [None, None], ["Q32", "Q32"]])
         parsed, errors = parse_mapping(p, store_cols(), source_vars())
         assert len(parsed) == 2
+        assert errors == []
 
-    def test_blank_source_var_skipped(self, tmp_path):
+    def test_half_filled_row_is_rejected(self, tmp_path):
+        from openpyxl import Workbook
+        from store_sync.ui.mapping_io import HEADERS, parse_mapping
+
+        p = tmp_path / "m.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws.append(HEADERS)
+        ws.append(["A", "", "text"])  # store col only -> incomplete
+        wb.save(p)
+        cols, errors = parse_mapping(p, ["A"], ["V"])
+        assert any("incomplete row" in e for e in errors)
+
+    def test_blank_source_var_rejected_as_incomplete(self, tmp_path):
         p = self._write(tmp_path, [["I7_1_2", "T_QPM1_1"], ["I8a_1", ""]])
         parsed, errors = parse_mapping(p, store_cols(), source_vars())
         assert len(parsed) == 1
+        assert any("incomplete row" in e for e in errors)
 
     def test_unknown_store_col_rejected(self, tmp_path):
         p = self._write(tmp_path, [["NOPE", "Q32"]])

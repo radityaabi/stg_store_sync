@@ -52,6 +52,19 @@ def make_config(*, id_column="uniqueID", mode="mapped", columns=None):
     )
 
 
+def minimal_config():
+    return JobConfig(
+        job="j",
+        store=StoreConfig(id=1, id_column="No"),
+        source=SourceConfig(survey_id="S"),
+        binding=BindingConfig(
+            match=ColumnBinding("SbjNum", "SbjNum"),
+            columns=[ColumnBinding("V", "A")],
+        ),
+        write=WriteConfig(),
+    )
+
+
 class FakeClient:
     def __init__(self, error=None):
         self.error = error
@@ -165,6 +178,17 @@ class TestChecks:
         )
         assert rep.match_store.unique is False
         assert rep.ok is False
+
+
+class TestEmptyStore:
+    def test_empty_store_reports_no_rows(self):
+        cfg = minimal_config()
+        rep = preflight(
+            store_rows=[],
+            source_records=[{"SbjNum": "1", "V": "x"}],
+            config=cfg,
+        )
+        assert any("store has no rows" in e for e in rep.errors)
 
 
 class TestStrict:

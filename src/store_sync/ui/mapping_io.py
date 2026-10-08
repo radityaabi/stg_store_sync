@@ -63,14 +63,15 @@ def parse_mapping(
     seen_store: set[str] = set()
     seen_source: set[str] = set()
 
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for n, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         store_col = _cell(row[0])
         source_var = _cell(row[1])
         kind = _cell(row[2]) if len(row) > 2 else ""
         if not store_col and not source_var:
             continue  # blank template row
         if not store_col or not source_var:
-            continue  # half-filled row, skip silently
+            errors.append(f"incomplete row {n}: store_col/source_var both required")
+            continue
 
         if store_col not in store_set:
             errors.append(f"unknown store column {store_col!r}")
