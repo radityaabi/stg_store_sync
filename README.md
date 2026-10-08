@@ -8,10 +8,12 @@ the STG REST API.
   `/SimpleExport`).
 - Target: an STG Subject Store, written via
   `/SubjectStores/AddRow|UpdateRow|DeleteRow`.
-- Identity: `SbjNum` (per-interview, immutable). `No` is an order tag (IsTag),
-  never identity.
+- Identity: a store **id/tag column declared per job** (e.g. `uniqueID`) keys the
+  writes; a separate **match key** (`SbjNum`, per-interview) drives the diff.
 - Lookup: by key-set difference — never by row position.
 - Fail-closed: ambiguous keys are quarantined, never guessed.
+- Columns are mapped by an operator-approved `source → store` alias pair (or an
+  **Excel mapping upload**); the pull term is derived, not hand-entered.
 - GUI with a **Sync** button; dry-run is the default.
 
 ## Status

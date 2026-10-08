@@ -172,13 +172,19 @@ source of truth. Fall back to a full export if a needed var cannot be produced b
 any term.
 
 The pull term is the **question-level base name**, which is **not** always
-derivable from the answer-level var by a fixed rule (`T_QPM1_1`→`QPM1`, but the
-loop var `I_351_Q46a`→`Q46a` breaks a simple strip). So:
+derivable from the answer-level var by a fixed string rule (`T_QPM1_1`→`QPM1`
+works, but the loop var `I_351_Q46a`→`Q46a` breaks a simple strip). So the base
+name is resolved as follows:
 
-- the job **declares** a `pull_name` per column (or per question group), and/or
-- **preflight offers it** from the survey's live variable list.
+- **derived automatically** from the survey's question/answer structure (read the
+  survey XML: each answer var belongs to a question; the question's `VariableName`
+  is the base name). This resolves the common answer-level case (`T_QPM1_1`).
+- if it cannot be resolved (loop/derived vars), fall back to a **full export** and
+  project locally — always correct, just heavier.
 
-Never guess the base name at sync time.
+**The user declares only two things per column: the store column and the source
+variable.** The pull term is an internal optimisation, shown **read-only** in
+preflight, never a required input. The filter is never a correctness dependency.
 
 ---
 
@@ -427,10 +433,12 @@ source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
 binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key
-  columns:                         # source → store alias pairs
-    - { source_var: "T_QPM1_1", store_col: "I7_1_2", pull_name: "QPM1", kind: text }
-    - { source_var: "T_QPM1_3", store_col: "I8a_1",  pull_name: "QPM1", kind: text }
-    - { source_var: "Q32",      store_col: "Q32",    pull_name: "Q32",  kind: text }
+  columns:                         # user declares: source var → store column (2 fields)
+    - { source_var: "T_QPM1_1", store_col: "I7_1_2", kind: text }
+    - { source_var: "T_QPM1_3", store_col: "I8a_1",  kind: text }
+    - { source_var: "Q32",      store_col: "Q32",    kind: text }
+  # pull term (question-level base name) is DERIVED (shown read-only in preflight);
+  # not a user input. If it cannot be resolved → full export + local projection.
 write:
   op: full_sync                    # add + update + delete
   dry_run: true
@@ -459,7 +467,20 @@ write:
 ### 7.3 GUI (PySide6)
 
 - Job list (add/edit/delete).
-- Preflight view + **Approve binding** dialog.
+- **Column binding editor** — the user declares, per column, **two fields only**:
+  - **store column** (chosen from the live `GetStore` columns), and
+  - **source variable** (chosen from a live searchable list of the survey's vars).
+  The pull term (question-level base name) is **derived and shown read-only**;
+  it is not an input. A non-derivable column is flagged and simply triggers a full
+  export at pull time.
+- **Excel import/export of the mapping** — the binding table can be **downloaded as
+  `.xlsx`** (template with the store columns pre-filled so the operator just fills
+  the source-variable column) and **uploaded back** to populate the job. This
+  supports bulk mapping for wide surveys without clicking row by row. Import is
+  validated (unknown store columns / source vars, duplicates → rejected with a
+  report) and still passes through **Approve binding** before any write.
+- Preflight view + **Approve binding** dialog (shows the derived pull terms,
+  id-column check, match-key uniqueness, value-overlap suggestions).
 - **Sync** button; Dry-run toggle (default on).
 - Run log + conflicts panel.
 - Delete-policy selector.

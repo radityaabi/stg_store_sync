@@ -49,7 +49,8 @@
 - [ ] Human review before enabling full sync
 
 ## Phase 5 — GUI
-- [ ] 5.1 `ui/main_window.py` — jobs, preflight, Approve dialog, Sync, dry-run, log, conflicts
+- [ ] 5.1 `ui/main_window.py` — jobs, binding editor (2 fields; pull term derived read-only), preflight, Approve dialog, Sync, dry-run, log, conflicts
+- [ ] 5.2 `ui/mapping_io.py` — Excel template download + upload/validate the column mapping
 
 ## Checkpoint: GUI
 - [ ] `gui.py` launches; full flow exercised on real job in dry-run

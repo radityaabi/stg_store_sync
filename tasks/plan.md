@@ -100,15 +100,15 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 ### Phase 3: Data
 
 - [ ] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks with an
-  optional `variableNames` filter (from a **pull name** — the question-level base
-  name — declared per column or offered by preflight from a live variable list;
-  do **not** guess it by stripping the answer var, loop vars like `I_351_Q46a`
-  break the pattern), retry on mid-stream disconnect, flatten EAV →
-  `{Var: Value}` per subject (missing configured var → `""`), **verify** every
-  needed var is present (fall back to full export if not), and **project** to the
-  configured columns.
+  optional `variableNames` filter, where the **pull term (question-level base
+  name) is derived automatically** from the survey structure (answer var → its
+  question's `VariableName`); if a var cannot be resolved, fall back to a full
+  export. Retry on mid-stream disconnect, flatten EAV → `{Var: Value}` per subject
+  (missing configured var → `""`), **verify** every needed var is present, and
+  **project** to the configured columns.
   - Acceptance: EAV payload flattens correctly with empties as `""`; a filter that
-    drops a needed var triggers fallback; chunking + retry covered by tests.
+    drops a needed var triggers fallback; base-name resolution (`T_QPM1_1`→`QPM1`
+    via survey structure) covered; chunking + retry covered.
   - Verification: `pytest tests/core/test_fetcher.py`.
   - Deps: 1.3. Files: 2. Scope: M.
 
@@ -150,13 +150,17 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
 ### Phase 5: GUI
 
-- [ ] **Task 5.1: `ui/main_window.py`** — job list, config editor, preflight view +
-  Approve-binding dialog, Sync button, dry-run toggle, run log, conflicts panel,
-  delete-policy selector.
-  - Acceptance: operator can configure a job, run preflight, approve binding, and
-    run a dry-run Sync without touching code.
-  - Verification: manual smoke + `tests/ui/test_main_window.py` (construct + wiring).
-  - Deps: 2.2, 3.2, 4.2, 4.3. Files: 2-3. Scope: L (split if it grows).
+- [ ] **Task 5.1: `ui/main_window.py`** — job list, config editor, **column binding
+  editor (2 fields: store column + source variable; pull term derived, read-only)**,
+  **Excel import/export of the mapping** (`ui/mapping_io.py`: template download,
+  upload + validate), preflight view + Approve-binding dialog, Sync button, dry-run
+  toggle, run log, conflicts panel, delete-policy selector.
+  - Acceptance: operator can configure a job (by hand or by uploading an Excel
+    mapping), run preflight, approve binding, and run a dry-run Sync without
+    touching code; a bad Excel import is rejected with a report.
+  - Verification: manual smoke + `tests/ui/test_main_window.py` (construct + wiring)
+    + `tests/ui/test_mapping_io.py` (template/parse/validate round-trip).
+  - Deps: 2.2, 3.2, 4.2, 4.3. Files: 3-4. Scope: L (split if it grows).
 
 ### Checkpoint: GUI
 - [ ] `gui.py` launches; full flow exercised on the real job in dry-run
