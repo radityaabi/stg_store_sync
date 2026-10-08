@@ -35,6 +35,19 @@ def test_run_thread_stop_requests_cancellation():
     assert t.wait(3000)
 
 
+def test_run_thread_emits_error_marker_on_exception():
+    def run_fn(name, should_stop):
+        raise RuntimeError("boom")
+    t = RunThread(run_fn, "a")
+    got = []
+    t.finished_result.connect(got.append)
+    t.start()
+    assert t.wait(3000)
+    QCoreApplication.processEvents()
+    assert len(got) == 1
+    assert getattr(got[0], "status", None) == "error"
+
+
 def test_scheduler_thread_emits_due_names():
     got = []
 
@@ -57,6 +70,32 @@ def test_scheduler_thread_emits_due_names():
     t.wait(3000)
     QCoreApplication.processEvents()
     assert got == ["a", "b"]
+
+
+def test_scheduler_thread_survives_tick_exception():
+    got = []
+
+    class FlakyScheduler:
+        def __init__(self):
+            self._calls = 0
+
+        def tick(self):
+            self._calls += 1
+            if self._calls == 1:
+                raise RuntimeError("transient")
+            return ["a"]
+
+    t = SchedulerThread(FlakyScheduler(), interval=0.05)
+    t.due.connect(got.append)
+    t.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not got:
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    t.stop()
+    assert t.wait(3000)
+    QCoreApplication.processEvents()
+    assert got == ["a"]
 
 
 def test_scheduler_thread_stop_returns_promptly():

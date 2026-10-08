@@ -7,10 +7,13 @@ promptly (AGENTS.md §3.4).
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 from PySide6.QtCore import QThread, Signal
+
+logger = logging.getLogger(__name__)
 
 # Sleep granularity: long enough to avoid a busy loop, short enough that
 # `stop()` is observed promptly even with a large tick interval.
@@ -38,7 +41,15 @@ class SchedulerThread(QThread):
 
     def run(self) -> None:  # noqa: D401 - QThread entry point
         while not self._stop.is_set():
-            for name in self._scheduler.tick():
+            try:
+                due = self._scheduler.tick()
+            except Exception:
+                # A transient registry/DB error must not kill the thread
+                # permanently; log and continue to the next tick, mirroring
+                # Scheduler.run_forever.
+                logger.exception("scheduler_thread: tick raised; continuing")
+                due = ()
+            for name in due:
                 self.due.emit(name)
             self._sleep_interruptible()
 

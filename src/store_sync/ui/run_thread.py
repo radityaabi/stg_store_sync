@@ -9,10 +9,28 @@ leaks (AGENTS.md §3.4).
 """
 from __future__ import annotations
 
+import logging
 import threading
+from dataclasses import dataclass
 from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RunError:
+    """Result marker emitted when ``run_fn`` raised before producing a result.
+
+    Callers usually expect a ``SyncResult``; on an unexpected exception we can't
+    fabricate one, so we emit this lightweight marker (``status == "error"``)
+    instead of leaving the consumer waiting forever. The exception is logged.
+    """
+
+    name: str
+    error: BaseException
+    status: str = "error"
 
 
 class RunThread(QThread):
@@ -36,5 +54,11 @@ class RunThread(QThread):
         self._stop.set()
 
     def run(self) -> None:  # noqa: D401 - QThread entry point
-        result = self._run_fn(self._name, self._stop.is_set)
+        try:
+            result = self._run_fn(self._name, self._stop.is_set)
+        except Exception as exc:
+            # A failed run must still report back, else the consumer never
+            # learns the run ended. Emit an explicit error marker.
+            logger.exception("run_thread: run %r raised", self._name)
+            result = RunError(name=self._name, error=exc)
         self.finished_result.emit(result)
