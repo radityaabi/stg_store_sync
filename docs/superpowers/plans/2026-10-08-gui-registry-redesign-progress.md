@@ -8,7 +8,8 @@ Branch: `feat/phase1-skeleton` (base `a87e855`, the plan commit).
 ## Status: COMPLETE
 
 All 18 plan tasks plus a GUI-polish pass are implemented, reviewed clean, and
-committed. Final suite: **288 passed, 0 warnings** (`-W error` clean).
+committed. A whole-branch review was then run; its findings were fixed and
+re-reviewed. Final suite: **311 passed, 0 warnings** (`-W error` clean).
 
 ## Per-task ledger
 
@@ -32,9 +33,27 @@ committed. Final suite: **288 passed, 0 warnings** (`-W error` clean).
 | 16 | `Controller` — registry + queue + scheduler wiring | `fb12084`..`25f6176` | clean (2 fix rounds) |
 | — | GUI polish — shared `DESIGN.md` theme | `25f6176`..`a2e7dfd` | clean (1 fix round) |
 | 17 | Registry-backed CLI (`list`/`run`/`run-all`/`stop`) | `a2e7dfd`..`d420915` | APPROVED |
-| 18 | Whole-suite verification + docs | (this doc) | — |
+| 18 | Whole-suite verification + docs | `06e4242`, `57a084f`, `e96e12f`, `b2bb7a0` | reviewed clean |
 
-Phase gates: A (1–5) 198 · B/C (6–9) 230 · D (10–16) 264 · polish 280 · E (17) 288.
+Phase gates: A (1–5) 198 · B/C (6–9) 230 · D (10–16) 264 · polish 280 · E (17) 288 · whole-branch fixes 311.
+
+## Whole-branch review + fixes
+
+Two parallel reviewers (core engine, app surface) over `a87e855..06e4242`.
+Core: **Ship**, 1 Important. App surface: **Needs fixes**, 4 Important. All five
+fixed:
+
+| Fix | Finding | Commit | Review |
+| :--- | :--- | :--- | :--- |
+| readiness parity | `run_sync` gate was a subset of `preflight`; spec §3.3 requires `report.ok==False → blocked` | `57a084f` | clean |
+| history/conflicts + run detail | §6.2/§6.3 inert | `e96e12f` | see round 2 |
+| schedules button | dead | `e96e12f` | see round 2 |
+| delete confirm | no dialog (DESIGN.md) | `e96e12f` | see round 2 |
+| off-thread network | preflight/import/export blocked the GUI thread | `e96e12f` → `b2bb7a0` | round-2 fixed abort |
+
+The off-thread fix initially introduced an abandoned-running-`QThread` abort on
+`stop()`; round 2 (`b2bb7a0`) added a strong-ref `_workers` set, an unbounded
+`stop()` join, and a busy guard, and was re-reviewed clean.
 
 ## Task 18 verification
 
@@ -98,6 +117,11 @@ Collected from the per-task reviews; none blocks the redesign:
 - GUI-polish: dead `_T["heading_size"]`; theme docstring "mirrored 1:1" with 3 extras.
 - Task 17: dead `DEFAULT_STATE` const; `Registry` conn leak if `State(db)` ctor
   raises; dead `_run_one` KeyError branch + `_worst_code` `1 in codes`.
+- Whole-branch: GUI preflight screen may report "not ok" for a job whose only
+  issue is a source-side duplicate (which `run_sync` treats as skip→`partial`);
+  acceptable per spec §3.2. Gate now recomputes `suggest_aliases` per run (once
+  per job, acceptable). Re-entrancy busy-guard test only covers the
+  `_preflight_thread` slot, not `_mapping_thread` (same code path).
 
 ## Rollout next step (optional)
 
