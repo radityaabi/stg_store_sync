@@ -12,7 +12,7 @@ marked `blocked` and **no write happens** (fail-closed, §4.4).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from store_sync.core.binding import check_id_column, check_match_key
 from store_sync.core.config import JobConfig
@@ -26,7 +26,7 @@ def _window_start(window_days: int) -> str | None:
     """ISO date `window_days` ago, or `None` for an unbounded pull."""
     if not window_days or window_days <= 0:
         return None
-    return (datetime.utcnow() - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    return (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
 
 
 def _readiness_errors(config, store_rows) -> list[str]:
@@ -47,7 +47,6 @@ def _readiness_errors(config, store_rows) -> list[str]:
     if m and not check_match_key(store_rows, m.store_col).unique:
         errs.append(f"match key {m.store_col!r} is not unique in the store")
     return errs
-
 
 
 @dataclass
