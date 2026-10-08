@@ -18,11 +18,11 @@
 
 ## Phase 1 — Skeleton
 - [x] 1.1 Repo scaffold (`pyproject`, README, `.env.example`, `.gitignore`, package, tests)
-- [ ] 1.2 `core/config.py` — job schema + YAML load/save + validation
-- [ ] 1.3 `core/stg_client.py` — read+write REST methods (mock-tested)
+- [x] 1.2 `core/config.py` — job schema + YAML load/save + validation (17 tests)
+- [x] 1.3 `core/stg_client.py` — read+write REST methods (mock-tested, 25 tests)
 
 ## Checkpoint: Skeleton
-- [ ] `pytest` green; client mock-covered; config validation proven
+- [x] `pytest` green (42 tests); client mock-covered; config validation proven
 
 ## Phase 2 — Binding gate
 - [ ] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column declaration check (exists/uniqueness/no-op probe)

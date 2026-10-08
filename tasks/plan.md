@@ -58,13 +58,13 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Acceptance: `pip install -e .` succeeds; `python -c "import store_sync"` works.
   - Deps: 0. Files: 6. Scope: S.
 
-- [ ] **Task 1.2: `core/config.py`** — job schema (dataclasses) + YAML load/save +
+- [x] **Task 1.2: `core/config.py`** — job schema (dataclasses) + YAML load/save +
   validation (required fields, enum validation for `mode`/`op`/`delete_policy`).
   - Acceptance: valid config round-trips; invalid enum raises with a clear message.
   - Verification: `pytest tests/core/test_config.py`.
   - Deps: 1.1. Files: 2. Scope: S.
 
-- [ ] **Task 1.3: `core/stg_client.py`** — Basic auth, retry, methods:
+- [x] **Task 1.3: `core/stg_client.py`** — Basic auth, retry, methods:
   `get_stores`, `get_store`, `get_store_usage`, `survey_interview_ids`,
   `simple_export`, `add_row`, `update_row`, `delete_row`.
   - Acceptance: all methods unit-tested with a mocked transport; no live calls in tests.
@@ -72,7 +72,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
   - Deps: 1.1. Files: 2. Scope: M.
 
 ### Checkpoint: Skeleton
-- [ ] `pytest` green; client covered by mocks; config validation proven
+- [x] `pytest` green; client covered by mocks; config validation proven
 
 ### Phase 2: Binding gate
 
