@@ -1,64 +1,90 @@
-"""Main window (PySide6): job config, binding editor, preflight, sync, log.
+"""Stacked main window shell (PySide6).
 
-The window is intentionally thin: all logic lives in `core/`. It exposes small
-methods (`load_job`, `mark_binding_approved`, `set_preflight_rows`,
-`set_conflicts`, `append_log`) so the wiring is unit-testable with an offscreen
-QApplication.
+The window is a thin navigation shell: a gradient header (title · breadcrumb ·
+status dot) over a `QStackedWidget` holding the three pages built for the
+GUI-redesign phase — `Dashboard`, `JobDetail`, `RunDetail`. Each page is a pure
+view; the controller wires its intent signals. The shell simply:
 
-Style follows `stg_automation_suite/DESIGN.md`: gradient header, tabbed
-workspace, dark console log, bottom action rail.
+* owns the stack and the header,
+* switches between pages (`show_dashboard` / `show_job` / `show_run`),
+* re-exports every page's intent signal as a window-level proxy signal so the
+  controller can wire one object,
+* quits any owned threads on close via `_stop_owned_threads` (set by the
+  controller).
+
+Style follows the suite's `DESIGN.md`: gradient header, page bodies own their
+own action rails, dark console logs live inside the pages.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QCheckBox,
-    QComboBox,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
-    QLineEdit,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QTabWidget,
-    QTextEdit,
+    QMainWindow,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from store_sync.core.config import JobConfig, WriteConfig
-from store_sync.ui.job_table_model import JobTableModel  # noqa: F401  (re-export)
-from store_sync.ui.models import _DictTableModel
+from store_sync.ui.dashboard import Dashboard
+from store_sync.ui.job_detail import JobDetail
+from store_sync.ui.run_detail import RunDetail
 
 ICON = "\u25cf"  # status dot
 
+_TITLE = "STG Store Sync"
 
-class MainWindow(QWidget):
-    sync_requested = Signal()
+
+class MainWindow(QMainWindow):
+    """Stacked shell hosting Dashboard / JobDetail / RunDetail + proxy signals."""
+
+    # -- proxy signals (one per page intent the controller cares about) ----
+    new_requested = Signal()
+    run_requested = Signal(str)
+    stop_requested = Signal()
+    edit_requested = Signal(str)
+    delete_requested = Signal(str)
+    save_requested = Signal()
     preflight_requested = Signal()
-    import_mapping_requested = Signal()
-    export_mapping_requested = Signal()
+    approve_requested = Signal()
+    import_requested = Signal()
+    export_requested = Signal()
+    refresh_requested = Signal()
+    back = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("STG Store Sync")
-        self.resize(1000, 720)
-        self._job: JobConfig | None = None
-        self._binding_approved = False
+        self.setWindowTitle(_TITLE)
+        self.resize(1100, 760)
+
+        self._current_job: str | None = None
+        self._stop_owned_threads = lambda: None
+
         self._build_ui()
+        self._wire_signals()
+        self.show_dashboard()
 
     # -- construction ------------------------------------------------------
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        central = QWidget()
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         root.addWidget(self._header())
-        root.addWidget(self._workspace(), stretch=1)
-        root.addWidget(self._action_rail())
+
+        self.stack = QStackedWidget()
+        self.dashboard = Dashboard()
+        self.job_detail = JobDetail()
+        self.run_detail = RunDetail()
+        self.stack.addWidget(self.dashboard)
+        self.stack.addWidget(self.job_detail)
+        self.stack.addWidget(self.run_detail)
+        root.addWidget(self.stack, stretch=1)
+
+        self.setCentralWidget(central)
 
     def _header(self) -> QWidget:
         frame = QFrame()
@@ -69,229 +95,70 @@ class MainWindow(QWidget):
         )
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(18, 14, 18, 14)
-        title = QLabel("STG Store Sync")
+        lay.setSpacing(12)
+
+        title = QLabel(_TITLE)
         title.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
-        self.job_label = QLabel("no job loaded")
-        self.job_label.setStyleSheet("color: #e2e8f0;")
+        self.breadcrumb_label = QLabel("Dashboard")
+        self.breadcrumb_label.setStyleSheet("color: #e2e8f0; font-weight: 500;")
         self.status_label = QLabel(f"{ICON} ready")
         self.status_label.setStyleSheet("color: #86efac; font-weight: 600;")
+
         lay.addWidget(title)
-        lay.addSpacing(12)
-        lay.addWidget(self.job_label)
+        lay.addWidget(self.breadcrumb_label)
         lay.addStretch(1)
         lay.addWidget(self.status_label)
         return frame
 
-    def _workspace(self) -> QWidget:
-        tabs = QTabWidget()
-        tabs.addTab(self._job_tab(), "Job")
-        tabs.addTab(self._binding_tab(), "Columns")
-        tabs.addTab(self._preflight_tab(), "Preflight")
-        tabs.addTab(self._log_tab(), "Run log")
-        tabs.addTab(self._conflicts_tab(), "Conflicts")
-        self.tabs = tabs
-        return tabs
+    def _wire_signals(self) -> None:
+        # Dashboard -> window proxies.
+        self.dashboard.new_requested.connect(self.new_requested.emit)
+        self.dashboard.run_requested.connect(self.run_requested.emit)
+        self.dashboard.stop_requested.connect(self.stop_requested.emit)
+        self.dashboard.edit_requested.connect(self.edit_requested.emit)
+        self.dashboard.delete_requested.connect(self.delete_requested.emit)
+        self.dashboard.refresh_requested.connect(self.refresh_requested.emit)
+        self.dashboard.job_activated.connect(self.show_job)
 
-    def _job_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Store ID:"))
-        self.store_id_edit = QLineEdit()
-        row.addWidget(self.store_id_edit)
-        row.addWidget(QLabel("Id column:"))
-        self.id_column_edit = QLineEdit()
-        row.addWidget(self.id_column_edit)
-        lay.addLayout(row)
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Survey ID:"))
-        self.survey_id_edit = QLineEdit()
-        row2.addWidget(self.survey_id_edit)
-        row2.addWidget(QLabel("Match var:"))
-        self.match_var_edit = QLineEdit()
-        row2.addWidget(self.match_var_edit)
-        lay.addLayout(row2)
-        lay.addStretch(1)
-        return w
+        # Job detail -> window proxies. `run_requested` carries no payload on
+        # the page (the currently-open job is implied), so adapt it.
+        self.job_detail.back.connect(self.back.emit)
+        self.job_detail.save_requested.connect(self.save_requested.emit)
+        self.job_detail.preflight_requested.connect(self.preflight_requested.emit)
+        self.job_detail.approve_requested.connect(self.approve_requested.emit)
+        self.job_detail.run_requested.connect(self._on_detail_run)
+        self.job_detail.stop_requested.connect(self.stop_requested.emit)
+        self.job_detail.import_requested.connect(self.import_requested.emit)
+        self.job_detail.export_requested.connect(self.export_requested.emit)
 
-    def _binding_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        self.columns_model = JobTableModel(self)
-        view = QTableWidget()
-        view.hide()  # model is the source of truth; view added on demand
-        table = QTableWidget(0, len(JobTableModel.HEADERS))
-        table.setHorizontalHeaderLabels(JobTableModel.HEADERS)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.columns_view = table
-        lay.addWidget(table)
-        bar = QHBoxLayout()
-        add = QPushButton("Add column")
-        add.clicked.connect(self._on_add_column)
-        remove = QPushButton("Remove selected")
-        remove.clicked.connect(self._on_remove_column)
-        self.import_btn = QPushButton("Import mapping (.xlsx)")
-        self.import_btn.clicked.connect(self.import_mapping_requested.emit)
-        self.export_btn = QPushButton("Export template (.xlsx)")
-        self.export_btn.clicked.connect(self.export_mapping_requested.emit)
-        bar.addWidget(add)
-        bar.addWidget(remove)
-        bar.addStretch(1)
-        bar.addWidget(self.import_btn)
-        bar.addWidget(self.export_btn)
-        lay.addLayout(bar)
-        return w
+        # Run detail -> window proxies.
+        self.run_detail.back.connect(self.back.emit)
 
-    def _preflight_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        self.preflight_model = _DictTableModel(
-            ["store_col", "source_var", "overlap", "status"]
-        )
-        self.preflight_view = _dict_view(self.preflight_model)
-        lay.addWidget(self.preflight_view)
-        self.preflight_button = QPushButton("Run preflight")
-        self.preflight_button.clicked.connect(self.preflight_requested.emit)
-        self.approve_button = QPushButton("Approve binding")
-        self.approve_button.clicked.connect(self.mark_binding_approved)
-        bar = QHBoxLayout()
-        bar.addWidget(self.preflight_button)
-        bar.addStretch(1)
-        bar.addWidget(self.approve_button)
-        lay.addLayout(bar)
-        return w
+    # -- navigation --------------------------------------------------------
+    def show_dashboard(self) -> None:
+        self.breadcrumb_label.setText("Dashboard")
+        self.stack.setCurrentWidget(self.dashboard)
 
-    def _log_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        self.log_view = QTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setStyleSheet(
-            "background:#0f172a; color:#e2e8f0; font-family:monospace;"
-        )
-        lay.addWidget(self.log_view)
-        return w
+    def show_job(self, name: str) -> None:
+        self._current_job = name
+        self.breadcrumb_label.setText(f"Dashboard / {name}")
+        self.stack.setCurrentWidget(self.job_detail)
 
-    def _conflicts_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        self.conflicts_model = _DictTableModel(["match_value", "reason"])
-        self.conflicts_view = _dict_view(self.conflicts_model)
-        lay.addWidget(self.conflicts_view)
-        return w
-
-    def _action_rail(self) -> QWidget:
-        frame = QFrame()
-        frame.setStyleSheet("background:#f8fafc; border-top:1px solid #e2e8f0;")
-        lay = QHBoxLayout(frame)
-        lay.setContentsMargins(14, 10, 14, 10)
-
-        self.dry_run_check = QCheckBox("Dry run")
-        self.dry_run_check.setChecked(True)
-
-        lay.addWidget(QLabel("Delete policy:"))
-        self.delete_policy_combo = QComboBox()
-        self.delete_policy_combo.addItem("Full history", "full_history")
-        self.delete_policy_combo.addItem("Tracked only", "tracked_only")
-        self.delete_policy_combo.addItem("Manual", "manual")
-        lay.addWidget(self.delete_policy_combo)
-
-        lay.addStretch(1)
-        lay.addWidget(self.dry_run_check)
-        self.sync_button = QPushButton("Sync")
-        self.sync_button.setObjectName("btn_primary")
-        self.sync_button.setStyleSheet(
-            "QPushButton#btn_primary{background:#667eea;color:white;"
-            "padding:8px 22px;border-radius:6px;font-weight:600;}"
-        )
-        self.sync_button.setEnabled(False)
-        self.sync_button.clicked.connect(self.sync_requested.emit)
-        lay.addWidget(self.sync_button)
-        return frame
+    def show_run(self, run_id) -> None:
+        self.breadcrumb_label.setText(f"Dashboard / Run #{run_id}")
+        self.stack.setCurrentWidget(self.run_detail)
 
     # -- app API -----------------------------------------------------------
-    def load_job(self, job: JobConfig) -> None:
-        self._job = job
-        self._binding_approved = False
-        self.sync_button.setEnabled(False)
-        self.job_label.setText(job.job)
-        self.store_id_edit.setText(str(job.store.id))
-        self.id_column_edit.setText(job.store.id_column)
-        self.survey_id_edit.setText(job.source.survey_id)
-        self.match_var_edit.setText(job.binding.match.source_var if job.binding.match else "")
-        self.columns_model.set_columns(job.binding.columns)
-        self._sync_table_from_model()
-        idx = self.delete_policy_combo.findData(job.write.delete_policy)
-        if idx >= 0:
-            self.delete_policy_combo.setCurrentIndex(idx)
-        self.dry_run_check.setChecked(job.write.dry_run)
-
-    def mark_binding_approved(self) -> None:
-        self._binding_approved = True
-        self.sync_button.setEnabled(True)
-        self.append_log("binding approved")
-
     def set_status(self, status: str, color: str = "#86efac") -> None:
         self.status_label.setText(f"{ICON} {status}")
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
 
-    def store_fields(self):
-        from store_sync.core.config import StoreConfig
+    # -- slots -------------------------------------------------------------
+    def _on_detail_run(self) -> None:
+        if self._current_job is not None:
+            self.run_requested.emit(self._current_job)
 
-        return StoreConfig(id=int(self.store_id_edit.text() or 0),
-                           id_column=self.id_column_edit.text().strip())
-
-    def source_fields(self):
-        from store_sync.core.config import SourceConfig
-
-        return SourceConfig(survey_id=self.survey_id_edit.text().strip())
-
-    def write_fields(self):
-        return WriteConfig(
-            dry_run=self.dry_run_check.isChecked(),
-            delete_policy=self.delete_policy_combo.currentData(),
-        )
-
-    def set_preflight_rows(self, rows: list[dict]) -> None:
-        self.preflight_model.set_rows(rows)
-        if self._job is not None:
-            self.columns_model.set_pull_terms(
-                {r.get("source_var"): r.get("pull_term", "") for r in rows if r.get("source_var")}
-            )
-
-    def set_conflicts(self, rows: list[dict]) -> None:
-        self.conflicts_model.set_rows(rows)
-
-    def append_log(self, message: str) -> None:
-        self.log_view.append(message)
-
-    def _sync_table_from_model(self) -> None:
-        cols = self.columns_model.columns()
-        t = self.columns_view
-        t.setRowCount(len(cols))
-        for i, c in enumerate(cols):
-            t.setItem(i, 0, QTableWidgetItem(c.store_col))
-            t.setItem(i, 1, QTableWidgetItem(c.source_var))
-            t.setItem(i, 2, QTableWidgetItem(""))
-            t.setItem(i, 3, QTableWidgetItem(c.kind))
-
-    def _on_add_column(self) -> None:
-        self.columns_model.add_row()
-        self._sync_table_from_model()
-
-    def _on_remove_column(self) -> None:
-        row = self.columns_view.currentRow()
-        if row >= 0:
-            self.columns_model.remove_row(row)
-            self._sync_table_from_model()
-
-
-# --- small generic dict table ----------------------------------------------
-
-
-def _dict_view(model: _DictTableModel) -> QTableWidget:
-    t = QTableWidget(0, len(model.fields))
-    t.setHorizontalHeaderLabels(model.fields)
-    t.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-    return t
+    # -- lifecycle ---------------------------------------------------------
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._stop_owned_threads()
+        super().closeEvent(event)
