@@ -134,10 +134,13 @@ class Dashboard(QWidget):
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.clicked.connect(self.refresh_requested.emit)
 
+        self.new_button = new_btn
         self.run_button = run_btn
         self.stop_button = stop_btn
         self.edit_button = edit_btn
         self.delete_button = delete_btn
+        self.schedules_button = schedules_btn
+        self.refresh_button = refresh_btn
 
         lay.addWidget(new_btn)
         lay.addWidget(run_btn)

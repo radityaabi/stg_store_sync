@@ -25,3 +25,54 @@ def test_queue_strip_and_stats():
     d.set_stats(total=3, enabled=2, running=1, failed=0)
     assert "a" in d.queue_label.text()
     assert "b" in d.queue_label.text()
+
+
+def test_run_edit_delete_emit_selected_name():
+    d = Dashboard()
+    d.set_entries([E("a"), E("b")])
+    seen = []
+    d.run_requested.connect(lambda n: seen.append(("run", n)))
+    d.edit_requested.connect(lambda n: seen.append(("edit", n)))
+    d.delete_requested.connect(lambda n: seen.append(("del", n)))
+    d.table.selectRow(1)
+    d.run_button.click()
+    d.edit_button.click()
+    d.delete_button.click()
+    assert seen == [("run", "b"), ("edit", "b"), ("del", "b")]
+
+
+def test_run_edit_delete_noop_without_selection():
+    d = Dashboard()
+    d.set_entries([E("a"), E("b")])
+    seen = []
+    d.run_requested.connect(seen.append)
+    d.edit_requested.connect(seen.append)
+    d.delete_requested.connect(seen.append)
+    d.run_button.click()
+    d.edit_button.click()
+    d.delete_button.click()
+    assert seen == []
+
+
+def test_double_click_activates():
+    d = Dashboard()
+    d.set_entries([E("a"), E("b")])
+    seen = []
+    d.job_activated.connect(seen.append)
+    d.table.doubleClicked.emit(d.model.index(1, 0))
+    assert seen == ["b"]
+
+
+def test_plain_signals_emit():
+    d = Dashboard()
+    seen = []
+    d.new_requested.connect(lambda: seen.append("new"))
+    d.stop_requested.connect(lambda: seen.append("stop"))
+    d.schedules_requested.connect(lambda: seen.append("sched"))
+    d.refresh_requested.connect(lambda: seen.append("refresh"))
+    d.new_button.click()
+    d.stop_button.click()
+    d.schedules_button.click()
+    d.refresh_button.click()
+    assert seen == ["new", "stop", "sched", "refresh"]
+
