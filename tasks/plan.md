@@ -159,7 +159,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
 ### Phase 5: GUI
 
-- [ ] **Task 5.1: `ui/main_window.py`** — job list, config editor, **column binding
+- [x] **Task 5.1: `ui/main_window.py`** — job list, config editor, **column binding
   editor (2 fields: store column + source variable; pull term derived, read-only)**,
   **Excel import/export of the mapping** (`ui/mapping_io.py`: template download,
   upload + validate), preflight view + Approve-binding dialog, Sync button, dry-run
@@ -176,7 +176,7 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
 ### Phase 6: Scheduled (optional)
 
-- [ ] **Task 6.1: `cli.py` + filelock** — headless `sync` command + `run-due`-style
+- [x] **Task 6.1: `cli.py` + filelock** — headless `sync` command + `run-due`-style
   entry for OS cron; single-instance lock; audit log.
   - Acceptance: two concurrent runs do not overlap (lock proven); CLI exit codes
     reflect outcome.
