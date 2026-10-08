@@ -48,13 +48,25 @@ class RunQueue:
         self._thread = threading.Thread(target=self._worker, name="run-queue", daemon=True)
         self._thread.start()
 
-    def shutdown(self) -> None:
-        """Signal the active run, wake the worker, and join it."""
+    def shutdown(self, *, timeout: float = 5.0) -> None:
+        """Signal the active run, wake the worker, and join it (bounded).
+
+        The join is bounded so a run that ignores `should_stop` cannot wedge
+        shutdown forever; if the worker is still alive after `timeout` we return
+        anyway (the thread is a daemon). The sentinel is only queued when a
+        worker exists, so `shutdown()` before `start()` (or a second
+        `shutdown()`) cannot leave a stale sentinel that would later stop a
+        freshly restarted worker on its first `get()`.
+        """
         self._stop_event.set()
-        self._queue.put(_SENTINEL)
-        if self._thread is not None:
-            self._thread.join()
+        with self._lock:
+            self._pending.clear()
+        thread = self._thread
+        if thread is not None:
+            self._queue.put(_SENTINEL)
+            thread.join(timeout=timeout)
             self._thread = None
+        self._notify()
 
     # -- public API --------------------------------------------------------
 
@@ -101,7 +113,7 @@ class RunQueue:
         while True:
             item = self._queue.get()
             if item is _SENTINEL:
-                # Drain any sentinel copies and exit.
+                # Shutdown was requested; stop the worker mid-run-safe.
                 return
             with self._lock:
                 if item not in self._pending:
