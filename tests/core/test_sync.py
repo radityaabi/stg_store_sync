@@ -206,6 +206,18 @@ def test_transport_error_leaves_run_finished(st):
     assert run["finished_at"] is not None
 
 
+class TestCancellation:
+    def test_cancelled_run_status_and_tracking(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        state = {"n": 0}
+        def stop():
+            state["n"] += 1
+            return state["n"] > 1
+        res = run_sync(config(dry_run=False), client=c, state=st, should_stop=stop)
+        assert res.status == "cancelled"
+        assert st.recent_runs("link1")[0]["status"] == "cancelled"
+
+
 class TestPull:
     def test_uses_derived_filter(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())

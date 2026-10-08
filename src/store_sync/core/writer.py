@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 from requests.exceptions import (
     ChunkedEncodingError,
@@ -39,6 +40,7 @@ class WriteResult:
     errors: list[str] = field(default_factory=list)
     unverified_deletes: list = field(default_factory=list)
     counts: dict = field(default_factory=dict)
+    cancelled: bool = False
 
 
 def apply_plan(
@@ -51,8 +53,13 @@ def apply_plan(
     max_retries: int = 3,
     backoff: float = 1.0,
     id_column: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> WriteResult:
-    """Apply (or dry-run) the write actions in `plan`."""
+    """Apply (or dry-run) the write actions in `plan`.
+
+    When `should_stop()` returns true, stop before the next action and mark
+    `WriteResult.cancelled`; already-applied actions stay tracked.
+    """
     res = WriteResult()
     id_col = id_column or (plan.actions[0].id_column if plan.actions else None)
 
@@ -67,6 +74,9 @@ def apply_plan(
     deleted_tags: list = []
     wrote_since_sleep = False
     for action in todo:
+        if should_stop and should_stop():
+            res.cancelled = True
+            break
         if wrote_since_sleep and throttle:
             time.sleep(throttle)
         wrote_since_sleep = False

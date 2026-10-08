@@ -12,7 +12,7 @@ returns parsed JSON. Retries apply to GETs that STG is known to drop mid-stream
 from __future__ import annotations
 
 import time
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 from urllib.parse import quote
 
 import requests
@@ -34,6 +34,10 @@ EXPORT_TIMEOUT = 300
 
 class STGError(RuntimeError):
     """A non-2xx response from the STG API (or a malformed one)."""
+
+
+class Cancelled(Exception):
+    """A cooperative stop was requested (raised between export chunks)."""
 
 
 class STGClient:
@@ -185,10 +189,13 @@ class STGClient:
         variable_names: Sequence[str] | None = None,
         include_nulls: bool | None = None,
         chunk: int | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> list[dict]:
         """Pull subjects via /SimpleExport, chunked and retried per chunk.
 
         Returns the flat list of subject objects (`{SubjectID, Columns:[...]}`).
+        When `should_stop()` returns true, raise `Cancelled` before the next
+        chunk (cooperative mid-pull cancellation).
         """
         ids = [str(s) for s in subject_ids]
         if not ids:
@@ -196,6 +203,8 @@ class STGClient:
         size = max(1, int(chunk if chunk is not None else self.export_chunk))
         out: list[dict] = []
         for i in range(0, len(ids), size):
+            if should_stop and should_stop():
+                raise Cancelled()
             params: dict[str, Any] = {
                 "surveyID": survey_id,
                 "subjectIDs": ",".join(ids[i : i + size]),

@@ -187,6 +187,19 @@ class TestTransportRetry:
         assert 3 in res.unverified_deletes
 
 
+def test_stop_before_second_action_keeps_first():
+    c = FakeClient()
+    p = plan_with(Action("add", "1", "No", 1, {"No": 1}),
+                  Action("update", "2", "No", 2, {"No": 2}))
+    calls = {"n": 0}
+    def stop():
+        calls["n"] += 1
+        return calls["n"] > 1   # allow the first, stop before the second
+    res = apply_plan(c, 17620, p, dry_run=False, should_stop=stop)
+    assert res.cancelled is True
+    assert res.counts["add"] == 1 and res.counts.get("update", 0) == 0
+
+
 class TestThrottle:
     def test_throttle_called_between_writes(self, monkeypatch):
         slept = []

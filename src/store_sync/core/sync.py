@@ -20,6 +20,7 @@ from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
 from store_sync.core.planner import Plan, plan
 from store_sync.core.preflight import preflight
+from store_sync.core.stg_client import Cancelled
 from store_sync.core.writer import apply_plan
 
 logger = logging.getLogger(__name__)
@@ -109,8 +110,14 @@ def run_sync(
     throttle: float = 0.0,
     max_retries: int = 3,
     backoff: float = 1.0,
+    should_stop=None,
 ) -> SyncResult:
-    """Run one full sync (dry-run by default per `config.write.dry_run`)."""
+    """Run one full sync (dry-run by default per `config.write.dry_run`).
+
+    `should_stop` is an optional zero-arg predicate polled between pull chunks
+    and between write actions; when it trips the run is finished `cancelled`
+    and any writes already applied stay tracked.
+    """
     dry_run = config.write.dry_run
     run_id = state.start_run(job=config.job, dry_run=dry_run)
 
@@ -137,14 +144,22 @@ def run_sync(
             date_start=_window_start(config.source.window_days),
         )
         match = config.binding.match
-        pulled = pull(
-            client,
-            config.source.survey_id,
-            subject_ids,
-            source_vars=[c.source_var for c in config.binding.columns],
-            match_var=match.source_var if match else None,
-            survey_index=index,
-        )
+        try:
+            pulled = pull(
+                client,
+                config.source.survey_id,
+                subject_ids,
+                source_vars=[c.source_var for c in config.binding.columns],
+                match_var=match.source_var if match else None,
+                survey_index=index,
+                should_stop=should_stop,
+            )
+        except Cancelled:
+            _finish("cancelled", {})
+            return SyncResult(
+                plan=p, dry_run=dry_run, status="cancelled", counts={},
+                errors=errors, run_id=run_id,
+            )
 
         # 2) load the store --------------------------------------------------
         store_rows = client.get_store(config.store.id)
@@ -212,6 +227,7 @@ def run_sync(
             max_retries=max_retries,
             backoff=backoff,
             id_column=config.store.id_column,
+            should_stop=should_stop,
         )
         errors.extend(wres.errors)
 
@@ -226,6 +242,15 @@ def run_sync(
                         match_value=action.match_value,
                         row_hash=state.row_hash(action.payload),
                     )
+
+        # A cooperative stop mid-apply: writes already applied stay tracked,
+        # and the run is finished exactly once as `cancelled`.
+        if wres.cancelled:
+            _finish("cancelled", wres.counts)
+            return SyncResult(
+                plan=p, dry_run=dry_run, status="cancelled", counts=wres.counts,
+                errors=errors, run_id=run_id,
+            )
 
         if errors:
             status = "partial" if wres.applied else "error"

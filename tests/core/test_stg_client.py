@@ -212,6 +212,22 @@ class TestSimpleExport:
         _, url, params, *_ = s.calls[0]
         assert "variableNames" not in params
 
+    def test_should_stop_raises_cancelled_between_chunks(self, client_and_session):
+        from store_sync.core.stg_client import Cancelled
+
+        c, s = client_and_session
+        s._responses = [FakeResponse(200, [{"SubjectID": "1", "Columns": []}])]
+        calls = {"n": 0}
+
+        def stop():
+            calls["n"] += 1
+            return calls["n"] > 1  # allow first chunk, stop before second
+
+        with pytest.raises(Cancelled):
+            c.simple_export("S", ["1", "2"], chunk=1, should_stop=stop)
+        # only the first chunk's request went out
+        assert len(s.calls) == 1
+
 
 class TestRetry:
     def test_retries_on_chunked_encoding_error(self, client_and_session):
