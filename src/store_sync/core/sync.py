@@ -132,6 +132,12 @@ def run_sync(
         return SyncResult(plan=p, dry_run=dry_run, status="blocked",
                           counts=p.counts, errors=errors, run_id=run_id)
 
+    # source-side duplicates are skipped but the run continues; when any non-
+    # conflicting writes were applied the run is `partial`, not `ok` (§3.2).
+    skipped_source = any(
+        a.kind == "conflict" and a.side == "source" for a in p.actions
+    )
+
     # 5) apply ---------------------------------------------------------------
     wres = apply_plan(
         client,
@@ -159,6 +165,8 @@ def run_sync(
 
     if errors:
         status = "partial" if wres.applied else "error"
+    elif skipped_source and wres.applied:
+        status = "partial"
     else:
         status = "ok"
 

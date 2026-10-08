@@ -159,6 +159,20 @@ class TestConflicts:
         assert res.status == "blocked"
         assert res.errors
 
+    def test_source_duplicate_skips_and_status_partial(self, st):
+        subs = subjects() + [
+            subj("4", [("SbjNum", 104), ("T_QPM1_1", "Dup"), ("Q32", 1)])
+        ]
+        c = FakeClient(store=store_rows(), subjects=subs)
+        res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        # source-side duplicate is skipped, but writes still happen -> partial
+        assert res.status == "partial"
+        kinds = [x[0] for x in c.calls]
+        assert "update" in kinds and "delete" in kinds
+        assert "add" not in kinds  # the duplicate key 104 is skipped
+        run = st.recent_runs("link1")[0]
+        assert run["status"] == "partial"
+
     def test_conflicts_persisted(self, st):
         rows = store_rows() + [{"No": 9, "SbjNum": "101", "I7_1_2": "x", "Q32": 1}]
         c = FakeClient(store=rows, subjects=subjects())
