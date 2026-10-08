@@ -241,6 +241,7 @@ class JobDetail(QWidget):
             self.delete_policy_combo.setCurrentIndex(idx)
         self.dry_run_check.setChecked(bool(job.write.dry_run))
 
+        self.binding_model.set_pull_terms({})
         self.binding_model.set_columns(job.binding.columns)
 
         self.enabled_check.setChecked(bool(getattr(entry, "enabled", False)))
@@ -268,11 +269,11 @@ class JobDetail(QWidget):
 
     def config_fields(self) -> dict:
         return {
-            "store_id": int(self.store_id_edit.text() or 0),
+            "store_id": int(self.store_id_edit.text().strip() or 0),
             "id_column": self.id_column_edit.text().strip(),
             "survey_id": self.survey_id_edit.text().strip(),
             "match_source_var": self.match_var_edit.text().strip(),
-            "window_days": int(self.window_days_edit.text() or 0),
+            "window_days": int(self.window_days_edit.text().strip() or 0),
             "date_type": self.date_type_edit.text().strip(),
             "delete_policy": self.delete_policy_combo.currentData(),
             "dry_run": self.dry_run_check.isChecked(),

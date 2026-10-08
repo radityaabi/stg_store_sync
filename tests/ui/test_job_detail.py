@@ -14,6 +14,11 @@ def a_job():
         BindingConfig(ColumnBinding("SbjNum", "SbjNum"),
             [ColumnBinding("T_QPM1_1", "I7_1_2")]), WriteConfig())
 
+def b_job():
+    return JobConfig("b", StoreConfig(77, "Pid"), SourceConfig("S2"),
+        BindingConfig(ColumnBinding("OtherId", "OtherId"),
+            [ColumnBinding("T_X", "X1")]), WriteConfig())
+
 class E:
     name="a"; store_id=17620; survey_id="SURV"; schedule=""
     enabled=False; last_status=None; last_finished_at=None; column_count=1
@@ -89,3 +94,21 @@ def test_set_pull_terms_and_dict_tables():
     assert d.preflight_model.rowCount() == 1
     d.set_conflicts([{"match": "m", "reason": "r", "side": "x"}])
     assert d.conflicts_model.rowCount() == 1
+
+def test_reload_clears_stale_pull_terms():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_pull_terms({"T_QPM1_1": "X"})
+    assert d.binding_model.data(d.binding_model.index(0, 2), Qt.DisplayRole) == "X"
+    d.load(E(), b_job())
+    # Fresh load: old job's pull term must not survive into the new columns.
+    assert d.binding_model.data(d.binding_model.index(0, 2), Qt.DisplayRole) == ""
+    assert d.binding_model._pull_terms == {}
+
+def test_config_fields_tolerates_whitespace():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.store_id_edit.setText("   ")
+    d.window_days_edit.setText("  ")
+    assert d.config_fields()["store_id"] == 0
+    assert d.config_fields()["window_days"] == 0
