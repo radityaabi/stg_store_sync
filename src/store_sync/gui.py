@@ -14,7 +14,9 @@ a `run_fn`, so no network is touched there. The module imports network-free.
 """
 from __future__ import annotations
 
+import logging
 import sys
+import threading
 import types
 from dataclasses import replace
 from pathlib import Path
@@ -43,11 +45,21 @@ from store_sync.ui.main_window import MainWindow  # noqa: E402
 from store_sync.ui.mapping_io import export_template, parse_mapping  # noqa: E402
 from store_sync.ui.scheduler_thread import SchedulerThread  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 
 def _default_db_path() -> Path:
     d = Path.home() / ".stg_store_sync"
     d.mkdir(parents=True, exist_ok=True)
     return d / "state.db"
+
+
+def _enable_wal(conn) -> None:
+    """Let a background write and a foreground read share the file cleanly."""
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:  # noqa: BLE001 - `:memory:` refuses WAL; harmless
+        logger.debug("journal_mode=WAL unavailable", exc_info=True)
 
 
 class _QueueBridge(QObject):
@@ -61,18 +73,39 @@ class _QueueBridge(QObject):
     changed = Signal(object)
 
 
+class _RegistryProxy:
+    """Thread-safe stand-in for `Registry` handed to the `Scheduler`.
+
+    The scheduler ticks on its own thread, so it must not be given the GUI
+    thread's connection. Every call resolves `Registry` lazily for the calling
+    thread.
+    """
+
+    def __init__(self, controller):
+        self._controller = controller
+
+    def list_entries(self):
+        return self._controller._registry().list_entries()
+
+
 class Controller:
     """Glue between the window and the registry / queue / scheduler."""
 
     def __init__(self, window: MainWindow, *, db_path=None, run_fn=None, now_fn=None):
         self.window = window
-        db_path = Path(db_path) if db_path is not None else _default_db_path()
-        self.state = State(db_path)
-        self.registry = Registry(db_path)
+        self._db_path = Path(db_path) if db_path is not None else _default_db_path()
+
+        # SQLite connections are per-thread; each thread that touches the DB
+        # gets its own `State`/`Registry` on first use via `_state`/`_registry`.
+        self._local = threading.local()
+        self._conns: list = []
+        self._conns_lock = threading.Lock()
 
         self._run_fn = run_fn or self._default_run_fn
         self.queue = RunQueue(self._run_fn)
-        self.scheduler = Scheduler(self.registry, self.queue.enqueue, now_fn=now_fn)
+        self.scheduler = Scheduler(
+            _RegistryProxy(self), self.queue.enqueue, now_fn=now_fn
+        )
         self._scheduler_thread: SchedulerThread | None = None
 
         self._detail_name: str | None = None
@@ -88,6 +121,37 @@ class Controller:
         window._stop_owned_threads = self.stop
         self._refresh()
 
+    # -- per-thread DB connections -----------------------------------------
+
+    def _state(self) -> State:
+        st = getattr(self._local, "state", None)
+        if st is None:
+            st = State(self._db_path)
+            _enable_wal(st.conn)
+            self._local.state = st
+            with self._conns_lock:
+                self._conns.append(st)
+        return st
+
+    def _registry(self) -> Registry:
+        reg = getattr(self._local, "registry", None)
+        if reg is None:
+            reg = Registry(self._db_path)
+            _enable_wal(reg.conn)
+            self._local.registry = reg
+            with self._conns_lock:
+                self._conns.append(reg)
+        return reg
+
+    # Backwards-compatible attributes: always the calling thread's connection.
+    @property
+    def state(self) -> State:
+        return self._state()
+
+    @property
+    def registry(self) -> Registry:
+        return self._registry()
+
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
@@ -101,7 +165,7 @@ class Controller:
         self._scheduler_thread.start()
 
     def stop(self) -> None:
-        """Stop both threads and close the DB connections (idempotent)."""
+        """Stop both threads and close every DB connection (idempotent)."""
         if self._stopped:
             return
         self._stopped = True
@@ -110,22 +174,37 @@ class Controller:
             self._scheduler_thread.wait(3000)
             self._scheduler_thread = None
         self.queue.shutdown()
-        self.state.close()
-        self.registry.close()
+        with self._conns_lock:
+            conns, self._conns = list(self._conns), []
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001 - a dead thread's conn must not block stop
+                logger.debug("error closing connection at stop", exc_info=True)
+        self._local = threading.local()
 
     # -- public API --------------------------------------------------------
 
     def run_now(self, name: str) -> None:
         self.queue.enqueue(name)
 
-    def save(self, name: str, job: JobConfig, *, schedule: str, enabled: bool) -> None:
-        """Persist `job` under `name` (add if new, else update) and refresh."""
+    def save(self, name: str, job: JobConfig, *, schedule: str, enabled: bool) -> bool:
+        """Persist `job` under `name` (add if new, else update) and refresh.
+
+        Returns True on success; on a registry error it logs and returns False
+        rather than raising out of a Qt slot.
+        """
         job = self._default_match_store_col(job)
-        if name in self.registry.names():
-            self.registry.update(name, job, schedule=schedule, enabled=enabled)
-        else:
-            self.registry.add(job, schedule=schedule, enabled=enabled)
+        try:
+            if name in self.registry.names():
+                self.registry.update(name, job, schedule=schedule, enabled=enabled)
+            else:
+                self.registry.add(job, schedule=schedule, enabled=enabled)
+        except Exception:  # noqa: BLE001 - never crash the save slot
+            logger.exception("controller: failed to save job %r", name)
+            return False
         self._refresh()
+        return True
 
     def delete(self, name: str) -> None:
         try:
@@ -151,13 +230,16 @@ class Controller:
             user=os.environ.get("STG_USER", ""),
             password=os.environ.get("STG_PASSWORD", ""),
         )
-        return run_sync(
-            job,
-            client=client,
-            state=self.state,
-            should_stop=should_stop,
-            throttle=0.05,
-        )
+        try:
+            return run_sync(
+                job,
+                client=client,
+                state=self.state,
+                should_stop=should_stop,
+                throttle=0.05,
+            )
+        finally:
+            self._close_client(client)
 
     def _client(self) -> STGClient:
         import os
@@ -167,6 +249,14 @@ class Controller:
             user=os.environ.get("STG_USER", ""),
             password=os.environ.get("STG_PASSWORD", ""),
         )
+
+    @staticmethod
+    def _close_client(client: STGClient) -> None:
+        """Close the client's `requests.Session` (STGClient has no `close()`)."""
+        try:
+            client.session.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("error closing STG client session", exc_info=True)
 
     @staticmethod
     def _default_match_store_col(job: JobConfig) -> JobConfig:
@@ -294,13 +384,21 @@ class Controller:
             self.window.set_status("save needs a name", "#f87171")
             return
         detail = self.window.job_detail
-        self.save(
+        try:
+            job = self._job_from_detail()
+        except ValueError:
+            logger.exception("controller: invalid config for %r", name)
+            self.window.set_status("config error", "#f87171")
+            return
+        if self.save(
             name,
-            self._job_from_detail(),
+            job,
             schedule=detail.schedule_edit.text().strip(),
             enabled=detail.enabled_check.isChecked(),
-        )
-        self.window.set_status(f"saved {name}", "#86efac")
+        ):
+            self.window.set_status(f"saved {name}", "#86efac")
+        else:
+            self.window.set_status(f"save failed: {name}", "#f87171")
 
     def _approve(self) -> None:
         # `JobDetail.approve()` has already checked the enabled box; persist the
@@ -309,27 +407,40 @@ class Controller:
         if not name:
             return
         detail = self.window.job_detail
-        self.save(
+        try:
+            job = self._job_from_detail()
+        except ValueError:
+            logger.exception("controller: invalid config for %r", name)
+            self.window.set_status("config error", "#f87171")
+            return
+        if self.save(
             name,
-            self._job_from_detail(),
+            job,
             schedule=detail.schedule_edit.text().strip(),
             enabled=detail.enabled_check.isChecked(),
-        )
-        self.window.set_status(f"binding approved: {name}", "#86efac")
+        ):
+            self.window.set_status(f"binding approved: {name}", "#86efac")
+        else:
+            self.window.set_status(f"approve failed: {name}", "#f87171")
 
     def _preflight(self) -> None:
         w = self.window
         try:
             job = self._job_from_detail()
-        except ValueError as e:  # invalid config from the detail page
+        except ValueError:
+            logger.exception("controller: invalid config for preflight")
             w.set_status("config error", "#f87171")
             return
         w.set_status("preflight...", "#fbbf24")
+        client = self._client()
         try:
-            report, pull_terms = run_preflight(job, client=self._client())
+            report, pull_terms = run_preflight(job, client=client)
         except Exception:  # noqa: BLE001 - surface any failure to operator
+            logger.exception("controller: preflight failed")
             w.set_status("preflight error", "#f87171")
             return
+        finally:
+            self._close_client(client)
         rows = [
             {
                 "column": r.source_var,
@@ -348,13 +459,18 @@ class Controller:
     # -- mapping import / export -------------------------------------------
 
     def _mapping_pool(self, job: JobConfig) -> tuple[list[str], list[str]]:
-        client = self._client()
         from store_sync.core.fetcher import parse_survey_index
 
-        store_cols = sorted({k for r in client.get_store(job.store.id) for k in r})
-        source_vars = sorted(
-            parse_survey_index(client.get_survey_xml(job.source.survey_id)).keys()
-        )
+        client = self._client()
+        try:
+            store_cols = sorted(
+                {k for r in client.get_store(job.store.id) for k in r}
+            )
+            source_vars = sorted(
+                parse_survey_index(client.get_survey_xml(job.source.survey_id)).keys()
+            )
+        finally:
+            self._close_client(client)
         return store_cols, source_vars
 
     def _import_mapping(self) -> None:
@@ -369,6 +485,7 @@ class Controller:
             store_cols, source_vars = self._mapping_pool(job)
             parsed, errors = parse_mapping(path, store_cols, source_vars)
         except Exception:  # noqa: BLE001
+            logger.exception("controller: mapping import failed")
             w.set_status("import error", "#f87171")
             return
         if errors:
@@ -391,6 +508,7 @@ class Controller:
             store_cols, _ = self._mapping_pool(job)
             export_template(path, store_cols)
         except Exception:  # noqa: BLE001
+            logger.exception("controller: mapping export failed")
             w.set_status("export error", "#f87171")
             return
         w.set_status(f"template written: {path}", "#86efac")

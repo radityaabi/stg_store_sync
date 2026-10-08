@@ -1,5 +1,6 @@
 """Tests for the GUI controller wiring (offscreen Qt)."""
 import os
+import threading
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -110,3 +111,79 @@ def test_save_defaults_blank_match_store_col(tmp_path):
     assert c.list_entries()[0].match_store_col == "SbjNum"
     c.stop()
     w.close()
+
+
+def test_worker_thread_db_access(tmp_path):
+    """The queue worker must touch Registry/State without a thread error."""
+    w = MainWindow()
+    results = []
+
+    def run_fn(name, stop):
+        results.append(c.registry.get(name))
+        results.append(c.state.start_run(job=name, dry_run=True))
+
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=run_fn)
+    c.save("a", a_job(), schedule="", enabled=False)
+    c.start()
+    c.run_now("a")
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and not results:
+        time.sleep(0.02)
+    c.stop()
+    w.close()
+
+    assert len(results) == 2
+    assert results[0].job == "a"
+    assert isinstance(results[1], int)
+    run = c_state_get(tmp_path / "s.db", results[1])
+    assert run is not None and run["job"] == "a"
+
+
+def test_registry_from_plain_thread(tmp_path):
+    """`list_entries` from a non-GUI thread must not raise a thread error."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+
+    out = {}
+
+    def worker():
+        try:
+            out["entries"] = [e.name for e in c.registry.list_entries()]
+        except Exception as exc:  # noqa: BLE001
+            out["error"] = exc
+
+    th = threading.Thread(target=worker)
+    th.start()
+    th.join(3)
+    c.stop()
+    w.close()
+
+    assert "error" not in out, out["error"]
+    assert out["entries"] == ["a"]
+
+
+def test_save_bad_config_reports_error(tmp_path):
+    """A non-numeric store id must not raise out of the save slot."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.show_job("a")
+    w.job_detail.store_id_edit.setText("not-a-number")
+    c._save_from_detail()  # must not raise
+    assert c.list_entries() == []
+    assert "error" in w.status_label.text().lower()
+    assert "#f87171" in w.status_label.styleSheet()
+    c.stop()
+    w.close()
+
+
+def c_state_get(path, run_id):
+    """Read a run row with a fresh connection (no shared-thread issues)."""
+    from store_sync.core.state import State
+
+    st = State(path)
+    try:
+        return st.get_run(run_id)
+    finally:
+        st.close()
