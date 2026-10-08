@@ -24,8 +24,6 @@ def sample_dict():
         "store": {"id": 17417, "id_column": "uniqueID"},
         "source": {
             "survey_id": "60824d46-9b2e-41e5-8b47-ae11410ee24d",
-            "window_days": 0,
-            "date_type": "Upload",
         },
         "binding": {
             "mode": "mapped",
@@ -51,7 +49,6 @@ class TestRoundTrip:
         assert cfg.store.id == 17417
         assert cfg.store.id_column == "uniqueID"
         assert cfg.source.survey_id == "60824d46-9b2e-41e5-8b47-ae11410ee24d"
-        assert cfg.source.window_days == 0
         assert cfg.binding.mode == "mapped"
         assert cfg.binding.match.source_var == "SbjNum"
         assert cfg.binding.match.store_col == "SbjNum"
@@ -74,6 +71,13 @@ class TestRoundTrip:
         loaded = load_config(p)
         assert loaded == cfg
 
+    def test_stale_source_keys_are_ignored(self):
+        d = sample_dict()
+        d["source"]["window_days"] = 3          # legacy key in the wild
+        d["source"]["date_type"] = "Upload"
+        cfg = JobConfig.from_dict(d)
+        assert cfg.source == SourceConfig("60824d46-9b2e-41e5-8b47-ae11410ee24d")
+
 
 class TestDefaults:
     def test_minimal_config_fills_documented_defaults(self):
@@ -93,8 +97,6 @@ class TestDefaults:
         assert cfg.write.op == "full_sync"
         assert cfg.write.dry_run is True
         assert cfg.write.delete_policy == "full_history"
-        assert cfg.source.window_days == 0
-        assert cfg.source.date_type == "Upload"
 
     def test_column_kind_defaults_to_text(self):
         col = ColumnBinding.from_dict({"source_var": "A", "store_col": "B"})

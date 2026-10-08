@@ -62,7 +62,7 @@ def test_get_roundtrips_stored_fields(reg):
     job = JobConfig(
         "link2",
         StoreConfig(17620, "No"),
-        SourceConfig("SURV", window_days=7, date_type="Review"),
+        SourceConfig("SURV"),
         BindingConfig(
             ColumnBinding("SbjNum", "SbjNum"),
             [ColumnBinding("T_QPM1_1", "I7_1_2", "number")],
@@ -73,7 +73,7 @@ def test_get_roundtrips_stored_fields(reg):
     reg.add(job, schedule="", enabled=False)
     got = reg.get("link2")
     assert got.store == StoreConfig(17620, "No")
-    assert got.source == SourceConfig("SURV", window_days=7, date_type="Review")
+    assert got.source == SourceConfig("SURV")
     assert got.binding.match == ColumnBinding("SbjNum", "SbjNum")
     assert got.binding.columns == [ColumnBinding("T_QPM1_1", "I7_1_2", "number")]
     assert got.write.dry_run is False
@@ -96,8 +96,6 @@ def test_add_defaults(reg):
     assert e.schedule == ""
     assert e.dry_run is True
     assert e.delete_policy == "full_history"
-    assert e.window_days == 0
-    assert e.date_type == "Upload"
     assert e.column_count == 1
     assert e.last_status is None and e.last_finished_at is None
 
@@ -185,3 +183,24 @@ def test_delete_cascades_columns(reg):
     reg.delete("link1")
     count = reg.conn.execute("SELECT COUNT(*) AS n FROM job_columns").fetchone()["n"]
     assert count == 0
+
+
+def test_migration_drops_window_columns(tmp_path):
+    import sqlite3
+    db = tmp_path / "reg.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,"
+        " store_id INTEGER, id_column TEXT, survey_id TEXT, match_source_var TEXT,"
+        " match_store_col TEXT, window_days INTEGER DEFAULT 0,"
+        " date_type TEXT DEFAULT 'Upload', delete_policy TEXT DEFAULT 'full_history',"
+        " dry_run INTEGER DEFAULT 1, enabled INTEGER DEFAULT 1, schedule TEXT DEFAULT '');"
+    )
+    con.execute("INSERT INTO jobs (name, store_id, id_column, survey_id, match_source_var,"
+                " match_store_col, window_days, date_type, schedule)"
+                " VALUES ('old', 1, 'No', 'S', 'SbjNum', 'SbjNum', 5, 'Upload', '*/5 * * * *')")
+    con.commit(); con.close()
+    r = Registry(db)
+    cols = {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
+    assert "window_days" not in cols and "date_type" not in cols
+    r.close()

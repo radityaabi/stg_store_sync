@@ -191,8 +191,8 @@ def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
 
     entry = JobEntry(
         name="a", store_id=17620, id_column="No", survey_id="SURV",
-        match_source_var="SbjNum", match_store_col="SbjNum", window_days=0,
-        date_type="Upload", delete_policy="full_history", dry_run=True,
+        match_source_var="SbjNum", match_store_col="SbjNum",
+        delete_policy="full_history", dry_run=True,
         enabled=False, schedule="", column_count=1, last_status=None,
         last_finished_at=None,
     )
@@ -389,8 +389,8 @@ class _Report:
 def _preflight_entry():
     return JobEntry(
         name="a", store_id=17620, id_column="No", survey_id="SURV",
-        match_source_var="SbjNum", match_store_col="SbjNum", window_days=0,
-        date_type="Upload", delete_policy="full_history", dry_run=True,
+        match_source_var="SbjNum", match_store_col="SbjNum",
+        delete_policy="full_history", dry_run=True,
         enabled=False, schedule="", column_count=1, last_status=None,
         last_finished_at=None,
     )

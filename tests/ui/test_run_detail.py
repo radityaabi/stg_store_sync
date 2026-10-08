@@ -109,8 +109,8 @@ def a_job():
 
 def an_entry():
     return JobEntry(name="a", store_id=17620, id_column="No", survey_id="SURV",
-        match_source_var="SbjNum", match_store_col="SbjNum", window_days=5,
-        date_type="Upload", delete_policy="full_history", dry_run=True,
+        match_source_var="SbjNum", match_store_col="SbjNum",
+        delete_policy="full_history", dry_run=True,
         enabled=True, schedule="0 3 * * *", column_count=1,
         last_status=None, last_finished_at=None)
 
@@ -132,7 +132,7 @@ def test_job_dialog_edit_round_trip():
 
 
 def distinct_match_job():
-    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV", 5, "Upload"),
+    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV"),
         BindingConfig(ColumnBinding("SbjNum", "SubjectID"),
             [ColumnBinding("T_QPM1_1", "I7_1_2")]), WriteConfig())
 

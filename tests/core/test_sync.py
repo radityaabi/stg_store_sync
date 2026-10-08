@@ -237,14 +237,10 @@ class TestPull:
 
 
 class TestReadiness:
-    def test_window_and_date_type_passed(self, st):
+    def test_pull_is_unbounded(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
-        cfg = config(dry_run=True)
-        cfg.source.window_days = 3
-        cfg.source.date_type = "Upload"
-        run_sync(cfg, client=c, state=st)
-        assert c.id_kwargs["date_type"] == "Upload"
-        assert c.id_kwargs["date_start"] is not None
+        run_sync(config(dry_run=True), client=c, state=st)
+        assert c.id_kwargs == {}          # no date_start / date_type
 
     def test_missing_id_column_blocks_before_write(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())

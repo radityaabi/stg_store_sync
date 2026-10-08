@@ -42,23 +42,15 @@ class StoreConfig:
 @dataclass
 class SourceConfig:
     survey_id: str
-    window_days: int = 0
-    date_type: str = "Upload"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SourceConfig":
-        return cls(
-            survey_id=str(d.get("survey_id", "")),
-            window_days=int(d.get("window_days", 0)),
-            date_type=str(d.get("date_type", "Upload")),
-        )
+        # Legacy `window_days`/`date_type` keys are deliberately ignored: the
+        # pull is always the survey's full history.
+        return cls(survey_id=str(d.get("survey_id", "")))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "survey_id": self.survey_id,
-            "window_days": self.window_days,
-            "date_type": self.date_type,
-        }
+        return {"survey_id": self.survey_id}
 
 
 @dataclass

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 
 from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
@@ -23,13 +22,6 @@ from store_sync.core.stg_client import Cancelled
 from store_sync.core.writer import apply_plan
 
 logger = logging.getLogger(__name__)
-
-
-def _window_start(window_days: int) -> str | None:
-    """ISO date `window_days` ago, or `None` for an unbounded pull."""
-    if not window_days or window_days <= 0:
-        return None
-    return (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
 
 
 def _readiness_errors(config, store_rows, source_records) -> list[str]:
@@ -144,11 +136,7 @@ def run_sync(
     try:
         # 1) survey index + pull ---------------------------------------------
         index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
-        subject_ids = client.survey_interview_ids(
-            config.source.survey_id,
-            date_type=config.source.date_type,
-            date_start=_window_start(config.source.window_days),
-        )
+        subject_ids = client.survey_interview_ids(config.source.survey_id)
         match = config.binding.match
         try:
             pulled = pull(
