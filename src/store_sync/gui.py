@@ -1,7 +1,7 @@
 """PySide6 entry point: launch the STG Store Sync window.
 
 Wires the stacked window (Dashboard / JobDetail / RunDetail) to the persisted
-registry, the single-worker run queue, and the cron scheduler:
+registry, the single-worker run queue, and the interval scheduler:
 
 * **Registry** (`core/registry.py`) — the job configs, same SQLite file as `State`.
 * **RunQueue** (`core/run_queue.py`) — one worker thread, runs jobs one at a time
@@ -36,7 +36,6 @@ from store_sync.core.config import (  # noqa: E402
     SourceConfig,
     StoreConfig,
     WriteConfig,
-    human,
 )
 from store_sync.core.registry import Registry  # noqa: E402
 from store_sync.core.run_queue import RunQueue  # noqa: E402

@@ -183,7 +183,11 @@ class Schedule:
         }
 
     def validate(self) -> list[str]:
-        """Return every schedule error; empty list means usable."""
+        """Return every schedule error; empty list means usable.
+
+        Non-int `every`/`weekday` (a corrupt stored row) report as errors
+        rather than raising, so `human()` stays renderable.
+        """
         errors: list[str] = []
         if self.unit not in SCHEDULE_UNITS:
             errors.append(
@@ -193,19 +197,21 @@ class Schedule:
             return errors
         if self.unit == "":
             return errors
+        every = self.every if isinstance(self.every, int) else None
+        weekday = self.weekday if isinstance(self.weekday, int) else None
         if self.unit == "minute":
-            if not 1 <= self.every <= 59:
+            if every is None or not 1 <= every <= 59:
                 errors.append("schedule.every must be 1..59 for minute")
         elif self.unit == "hour":
-            if not 1 <= self.every <= 23:
+            if every is None or not 1 <= every <= 23:
                 errors.append("schedule.every must be 1..23 for hour")
         elif self.unit == "day":
-            if not 1 <= self.every <= 31:
+            if every is None or not 1 <= every <= 31:
                 errors.append("schedule.every must be 1..31 for day")
         elif self.unit == "week":
-            if not 1 <= self.every <= 52:
+            if every is None or not 1 <= every <= 52:
                 errors.append("schedule.every must be 1..52 for week")
-            if not 0 <= self.weekday <= 6:
+            if weekday is None or not 0 <= weekday <= 6:
                 errors.append("schedule.weekday must be 0..6 (0=Monday)")
         if self.unit in ("day", "week"):
             if not self.at:

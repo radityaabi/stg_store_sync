@@ -24,6 +24,14 @@ def test_human_malformed_falls_back():
     assert human(Schedule("week", 1)) == "manual only"
 
 
+def test_validate_and_human_survive_corrupt_types():
+    # A corrupt stored row (TEXT in an int column) must not raise.
+    assert Schedule("minute", "five").validate()
+    assert Schedule("week", 2, "02:00", "Mon").validate()
+    assert human(Schedule("minute", "five")) == "manual only"
+    assert human(Schedule("week", 2, "02:00", "Mon")) == "manual only"
+
+
 def test_validate_bounds():
     assert Schedule("minute", 60).validate()  # 60 out of 1..59
     assert Schedule("hour", 0).validate()  # 0 out of 1..23

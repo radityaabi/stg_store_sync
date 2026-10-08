@@ -47,6 +47,24 @@ def test_blank_and_malformed_never_due():
     assert is_due(Schedule("day", 1, "99:00"), datetime(2026, 10, 8, 2, 0)) is False
 
 
+def test_out_of_bounds_every_and_weekday_never_due():
+    # Spec §4.1 bounds — a schedule `Schedule.validate` rejects must also never
+    # fire, so the dashboard label ("manual only") and the engine agree.
+    assert is_due(Schedule("day", 32, "02:00"), datetime(2026, 10, 8, 2, 0)) is False
+    assert is_due(Schedule("week", 53, "02:00", 0), datetime(2026, 10, 8, 2, 0)) is False
+    assert is_due(Schedule("week", 2, "02:00", 9), datetime(2026, 10, 8, 2, 0)) is False
+    assert is_due(Schedule("week", 2, "02:00", -1), datetime(2026, 10, 8, 2, 0)) is False
+    assert is_due(Schedule("hour", 24), datetime(2026, 10, 8, 2, 0)) is False
+    assert is_due(Schedule("minute", 60), datetime(2026, 10, 8, 2, 0)) is False
+    # In-bounds values still fire (dates computed to satisfy each modulo).
+    # toordinal(2026-10-19) % 31 == 0
+    assert is_due(Schedule("day", 31, "02:00"), datetime(2026, 10, 19, 2, 0)) is True
+    # iso index of 2027-01-07 (Thu, week 1) % 52 == 0
+    assert is_due(Schedule("week", 52, "02:00", 3), datetime(2027, 1, 7, 2, 0)) is True
+    assert is_due(Schedule("hour", 23), datetime(2026, 10, 8, 23, 0)) is True
+    assert is_due(Schedule("minute", 59), datetime(2026, 10, 8, 2, 59)) is True
+
+
 class FakeRegistry:
     def __init__(self, entries):
         self._e = entries

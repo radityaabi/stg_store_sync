@@ -184,9 +184,12 @@ class Registry:
 
     @staticmethod
     def _entry(row: sqlite3.Row) -> JobEntry:
-        # Built with the dataclass constructor (DB columns are typed), not
-        # `from_dict` — a bad stored row must still yield a Schedule, never
-        # crash `list_entries`.
+        # The dataclass constructor performs no validation, so a corrupt row's
+        # *values* (e.g. TEXT in `schedule_every`) pass through unchanged;
+        # instead of pretending to catch them, catch anything (missing column
+        # keys raise IndexError, bad values surface later) and degrade to the
+        # manual-only default. A bad stored row must never crash
+        # `list_entries`.
         try:
             schedule = Schedule(
                 unit=row["schedule_unit"],
@@ -194,7 +197,7 @@ class Registry:
                 at=row["schedule_at"],
                 weekday=row["schedule_weekday"],
             )
-        except (TypeError, ValueError):
+        except Exception:  # noqa: BLE001 - corrupt row → manual only
             schedule = Schedule()
         return JobEntry(
             name=row["name"],

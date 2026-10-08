@@ -228,3 +228,21 @@ def test_schedule_migration_from_cron_becomes_manual(tmp_path):
     assert e.schedule == Schedule("") and e.enabled is True
     assert "schedule" not in {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
     r.close()
+
+
+def test_corrupt_schedule_row_degrades_to_manual(tmp_path):
+    """A TEXT value in an INTEGER schedule column must not break list_entries."""
+    import sqlite3
+
+    from store_sync.core.config import human
+
+    r = Registry(tmp_path / "reg.db")
+    r.add(a_job(), schedule=Schedule("minute", 5), enabled=True)
+    r.conn.execute(
+        "UPDATE jobs SET schedule_every = 'five' WHERE name = 'link1'"
+    )
+    r.conn.commit()
+    entries = r.list_entries()  # must not raise
+    assert entries[0].schedule.every == "five"  # passed through unvalidated
+    assert human(entries[0].schedule) == "manual only"  # renderable
+    r.close()

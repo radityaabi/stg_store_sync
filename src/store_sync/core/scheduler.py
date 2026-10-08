@@ -25,9 +25,18 @@ import time
 from datetime import datetime
 from typing import Callable
 
-from store_sync.core.config import Schedule
+from store_sync.core.config import SCHEDULE_UNITS, Schedule
 
 logger = logging.getLogger(__name__)
+
+# Spec §4.1 per-unit `every` bounds — a schedule `Schedule.validate` rejects
+# must also never fire, so the human label ("manual only") and the engine agree.
+_EVERY_BOUNDS = {
+    "minute": (1, 59),
+    "hour": (1, 23),
+    "day": (1, 31),
+    "week": (1, 52),
+}
 
 
 def _parse_at(at: str) -> tuple[int, int] | None:
@@ -45,17 +54,26 @@ def _parse_at(at: str) -> tuple[int, int] | None:
 
 
 def is_due(schedule: Schedule, now: datetime) -> bool:
-    """True if `schedule` (interval + anchor, spec §4.2) matches `now`."""
+    """True if `schedule` (interval + anchor, spec §4.2) matches `now`.
+
+    Applies the spec §4.1 bounds as well: a schedule `Schedule.validate`
+    rejects (unknown unit, out-of-range `every`, `weekday` outside 0..6 for
+    week, malformed `at`) is never due.
+    """
     if not isinstance(schedule, Schedule):
         return False
-    every = schedule.every
-    if schedule.unit not in ("minute", "hour", "day", "week"):
+    unit = schedule.unit
+    if unit not in SCHEDULE_UNITS or unit == "":  # "" = manual only
         return False
+    every = schedule.every
     if not isinstance(every, int) or every <= 0:
         return False
-    if schedule.unit == "minute":
+    lo, hi = _EVERY_BOUNDS[unit]
+    if not lo <= every <= hi:
+        return False
+    if unit == "minute":
         return now.minute % every == 0
-    if schedule.unit == "hour":
+    if unit == "hour":
         return now.minute == 0 and now.hour % every == 0
     anchor = _parse_at(schedule.at)
     if anchor is None:
@@ -64,9 +82,11 @@ def is_due(schedule: Schedule, now: datetime) -> bool:
     at_time = now.hour == hour and now.minute == minute
     if not at_time:
         return False
-    if schedule.unit == "day":
+    if unit == "day":
         return now.date().toordinal() % every == 0
     # week: weekday() is Monday=0, same numbering as Schedule.weekday.
+    if not 0 <= schedule.weekday <= 6:
+        return False
     if now.weekday() != schedule.weekday:
         return False
     iso = now.isocalendar()
