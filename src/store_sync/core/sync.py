@@ -12,12 +12,42 @@ marked `blocked` and **no write happens** (fail-closed, §4.4).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
+from store_sync.core.binding import check_id_column, check_match_key
 from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
 from store_sync.core.planner import Plan, plan
 from store_sync.core.preflight import preflight
 from store_sync.core.writer import apply_plan
+
+
+def _window_start(window_days: int) -> str | None:
+    """ISO date `window_days` ago, or `None` for an unbounded pull."""
+    if not window_days or window_days <= 0:
+        return None
+    return (datetime.utcnow() - timedelta(days=window_days)).strftime("%Y-%m-%d")
+
+
+def _readiness_errors(config, store_rows) -> list[str]:
+    """Fail-closed preconditions: a usable store snapshot is mandatory.
+
+    Without store rows we cannot learn the store's columns, so the declared id
+    column cannot be verified and the job must not write (spec §4.2.1/§4.4).
+    """
+    if not store_rows:
+        return ["store has no rows (cannot learn its columns; refusing to write)"]
+    errs = []
+    idc = check_id_column(store_rows, config.store.id_column)
+    if not idc.exists:
+        errs.append(f"id column {config.store.id_column!r} not present on the store")
+    elif not idc.unique:
+        errs.append(f"id column {config.store.id_column!r} is not unique")
+    m = config.binding.match
+    if m and not check_match_key(store_rows, m.store_col).unique:
+        errs.append(f"match key {m.store_col!r} is not unique in the store")
+    return errs
+
 
 
 @dataclass
@@ -84,7 +114,11 @@ def run_sync(
 
     # 1) survey index + pull -------------------------------------------------
     index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
-    subject_ids = client.survey_interview_ids(config.source.survey_id)
+    subject_ids = client.survey_interview_ids(
+        config.source.survey_id,
+        date_type=config.source.date_type,
+        date_start=_window_start(config.source.window_days),
+    )
     match = config.binding.match
     pulled = pull(
         client,
@@ -98,6 +132,11 @@ def run_sync(
     # 2) load the store ------------------------------------------------------
     store_rows = client.get_store(config.store.id)
     store_columns = sorted({k for r in store_rows for k in r})
+
+    # readiness preconditions (computed early; acted on before any write). We
+    # defer the block until after conflict recording so the run log stays
+    # complete for store-side duplicates the planner already flags.
+    readiness_errs = _readiness_errors(config, store_rows)
 
     # 3) plan ----------------------------------------------------------------
     tracked = state.tracked_keys(config.job)
@@ -125,7 +164,17 @@ def run_sync(
 
     errors: list[str] = []
 
-    # 4) fail-closed on store-side conflicts ---------------------------------
+    # 4) fail-closed readiness gate (before any write) -----------------------
+    if readiness_errs:
+        for err in readiness_errs:
+            state.record_conflict(run_id, match_value=None, reason=err)
+        state.finish_run(run_id, status="blocked", counts={})
+        return SyncResult(
+            plan=p, dry_run=dry_run, status="blocked", counts={},
+            errors=list(readiness_errs), run_id=run_id,
+        )
+
+    # 4b) fail-closed on store-side conflicts --------------------------------
     if p.blocked:
         errors.extend(a.reason for a in p.actions if a.kind == "conflict")
         state.finish_run(run_id, status="blocked", counts=p.counts)

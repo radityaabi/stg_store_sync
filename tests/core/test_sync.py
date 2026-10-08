@@ -48,11 +48,13 @@ class FakeClient:
         self.store = list(store or [])
         self.subjects = list(subjects or [])
         self.calls = []
+        self.id_kwargs = {}
 
     def get_survey_xml(self, survey_id):
         return SURVEY_XML
 
     def survey_interview_ids(self, survey_id, **kw):
+        self.id_kwargs = kw
         return [s["SubjectID"] for s in self.subjects]
 
     def simple_export(self, survey_id, ids, *, variable_names=None, **kw):
@@ -198,3 +200,25 @@ class TestPull:
         run_sync(config(dry_run=True), client=c, state=st)
         exports = [x for x in c.calls if x[0] == "export"]
         assert exports and exports[0][1] is not None
+
+
+class TestReadiness:
+    def test_window_and_date_type_passed(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        cfg = config(dry_run=True)
+        cfg.source.window_days = 3
+        cfg.source.date_type = "Upload"
+        run_sync(cfg, client=c, state=st)
+        assert c.id_kwargs["date_type"] == "Upload"
+        assert c.id_kwargs["date_start"] is not None
+
+    def test_missing_id_column_blocks_before_write(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False, id_column="Nope"), client=c, state=st)
+        assert res.status == "blocked"
+        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+
+    def test_empty_store_blocks(self, st):
+        c = FakeClient(store=[], subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st)
+        assert res.status == "blocked"
