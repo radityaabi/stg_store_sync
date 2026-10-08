@@ -42,7 +42,7 @@ Base URL `https://surveytogo.nielseniq.com/api`; **HTTP Basic** auth
 | Read store | `GET /SubjectStores/GetStore/{storeID}` | array of row objects; columns are dynamic |
 | Store usage | `GET /SubjectStores/GetStoreUsage/{storeID}` | array of `{SurveyID, Name}` |
 | Interview IDs | `GET /SurveyInterviewIDs?surveyIDs=&dateType=&dateStart=&dateEnd=&statuses=&orderBy=` | array or `{subjects:[...]}` |
-| Export answers | `GET /SimpleExport?surveyID=&subjectIDs=` | chunk ≤100 subjectIDs; EAV payload |
+| Export answers | `GET /SimpleExport?surveyID=&subjectIDs=&variableNames=` | `variableNames` optional token filter (probe §F9) |
 | Add row | `POST /SubjectStores/AddRow/{storeID}?<col>=<val>&...` | insert; columns must be **pre-defined** |
 | Update row | `POST /SubjectStores/UpdateRow/{storeID}?<col>=<val>&...` | **UPSERT** on the store id column; full-row |
 | Delete row | `POST /SubjectStores/DeleteRow/{storeID}/{userTag}` | `userTag` = **value of the store id column** |
@@ -66,10 +66,22 @@ in the path; `DeleteRow` takes the tag **value as a path segment**.
 ### 2.2 Export payload shape is EAV, not wide
 
 `GET /SimpleExport` returns
-`{"subjects":[{"SubjectID":"54861337","Columns":[{"Var":"SbjNum","Value":54861337}, ...]}, ...]}`.
+`{"Subjects":[{"SubjectID":"54861337","Columns":[{"Var":"SbjNum","Value":54861337}, ...]}, ...]}`
+(note the capital `Subjects`).
 
 To select columns we flatten `Columns[]` into a `{Var: Value}` dict per subject.
-Observed 910–974 distinct vars per survey.
+Observed 429–974 distinct vars per survey (429 after a token filter; 974 when the
+survey is broader).
+
+**Empty values are ABSENT, not empty strings** (probe F7). An unanswered var — e.g.
+an others-specify column like `Q42_TEXT` — does **not** appear in `Columns[]` at
+all (`present=1/296, empty=0`). Consequently:
+
+- "var missing from the export" means **empty**, not "not to be written".
+- 528 of 910 vars have partial presence (present in some subjects, absent in
+  others) — normal, driven by skip logic.
+- The flatten step must therefore treat a missing var as `""` for the configured
+  columns, never as "leave the store value untouched".
 
 ### 2.3 External List ↔ Subject Store
 
@@ -131,6 +143,26 @@ subject** (their interviews predate the window). Therefore "absent from the pull
 Over 296 subjects: `SbjNum` distinct = 296 ✅; `T_QPM1_2`/`QRelID_PanelistID`
 distinct = 296 ✅; **`QRelID_RVid` distinct = 248 ❌** (has duplicates);
 `SbjVer` = 44 ❌. A key-validity test must reject non-unique candidates.
+
+### 2.8 Pull only the needed variables (probe F9/F10)
+
+`SimpleExport` accepts `variableNames` (optional). The matching rule is
+**whole underscore-separated token**, not exact name and not substring:
+
+| term | result |
+|---|---|
+| `QPM1` | returns `T_QPM1_1`, `T_QPM1_2`, `T_QPM1_3` |
+| `T_QPM1` / `QPM1_2` / `Q42_TEXT` | returns nothing (not a single token) |
+| `Q42` | returns `Q42` |
+
+So an underscore-named var (the key `T_QPM1_2`) cannot be requested directly.
+Measured effect on Link1: `variableNames=QPM1,Q32,SbjNum` → **94 vars/subject**
+(vs 429 full), all needed vars present. ~90 STG metadata vars are always returned
+and are expected. Because the filter is advisory (a term may silently drop), the
+response is **verified** for every needed var, and the result is **projected to the
+configured columns** after the pull — the filter is an optimisation, the
+projection is the source of truth. Fall back to a full export if a needed var
+cannot be produced by any token.
 
 ---
 
@@ -290,6 +322,20 @@ zero) is **opt-in per column** and off by default. Known real differences:
 `store "8151883872"` vs `source "08151883872"`; `store "Jefta"` vs
 `source "Jefta Chleresta"`.
 
+**Empty is a value, not a skip.** A configured column that is absent from a
+subject's export is treated as `""` (probe §2.2). Empty is compared like any other
+value:
+
+```
+source ""  vs  store ""   → SAME   (no write)
+source ""  vs  store "x"  → UPDATE (clears the store cell to "")
+source "x" vs  store ""   → UPDATE (fills the store cell)
+```
+
+`""` and whitespace (`" "`) are **distinct** and both are stored verbatim (probe:
+`" "` round-tripped literally). Normalisation, where needed, must be declared per
+column; it never silently turns `""` into "skip".
+
 ---
 
 ## 6. Write Model & Delete Policy
@@ -312,6 +358,9 @@ Probe-corrected write rules (Fase 0):
 
 - Every write sends the **full row** (all columns) — the API resets omitted
   columns.
+- A configured column that is empty in the source must be **written as `""`**, not
+  omitted (omitting defaults the store cell; probe). Clearing a store cell is done
+  by updating it to `""`.
 - The id/tag value is assigned on add (`max(id)+1`) and **never changed** on
   update.
 - `UpdateRow` is an **upsert**; sending a full payload with an existing id value
@@ -357,7 +406,8 @@ job: gran_turismo_link1
 store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; preflight-verified
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
           window_days: 0,          # 0 = full history
-          date_type: Upload }      # Upload = server-arrival time
+          date_type: Upload,       # Upload = server-arrival time
+          variable_names: ["QPM1", "Q32", "SbjNum"] }  # optional token filter (probe F9)
 binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key
@@ -379,8 +429,10 @@ write:
   get_store + sample export → binding.preflight → USER APPROVE → persist binding
 
 [each Sync / tick]
-  fetcher.pull(survey, window, dateType=Upload)
-    └─ flatten EAV → per-subject {var: value}
+  fetcher.pull(survey, window, dateType=Upload, variableNames=<tokens>)
+    └─ flatten EAV → per-subject {var: value}   (missing configured var → "")
+    └─ VERIFY every needed var is present; else fall back to full export
+    └─ PROJECT to the configured columns (source of truth)
   binding.apply()                → {id_column, match, columns}
   planner.diff(store_rows, records)
     └─ add / update / delete / conflicts

@@ -35,6 +35,15 @@ verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not starte
 - `AddRow`/`UpdateRow` **cannot** create a column; columns must pre-exist in
   STG Studio.
 
+### Pull facts (verified live)
+
+- `SimpleExport` accepts `variableNames` (a **token** filter) so only needed
+  variables are pulled — ~4.5× smaller payload. The response is verified and
+  projected to the configured columns; fall back to a full export if a token
+  cannot produce a needed var.
+- Empty source values are **absent** from the export — treat them as `""` and
+  write them; never skip.
+
 ## Setup (once Phase 1 lands)
 
 ```bash

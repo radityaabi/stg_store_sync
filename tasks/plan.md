@@ -99,9 +99,13 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 
 ### Phase 3: Data
 
-- [ ] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks,
-  retry on mid-stream disconnect, flatten EAV → `{Var: Value}` per subject.
-  - Acceptance: EAV payload flattens correctly; chunking + retry covered by tests.
+- [ ] **Task 3.1: `core/fetcher.py`** — pull IDs + `SimpleExport` in chunks with an
+  optional `variableNames` token filter, retry on mid-stream disconnect, flatten
+  EAV → `{Var: Value}` per subject (missing configured var → `""`), **verify**
+  every needed var is present (fall back to full export if not), and **project**
+  to the configured columns.
+  - Acceptance: EAV payload flattens correctly with empties as `""`; a filter that
+    drops a needed var triggers fallback; chunking + retry covered by tests.
   - Verification: `pytest tests/core/test_fetcher.py`.
   - Deps: 1.3. Files: 2. Scope: M.
 
@@ -177,6 +181,8 @@ Findings: `docs/probe/2026-10-08-fase0-findings.md`.
 | 1 request/row × N | Medium | throttle + retry + resume |
 | Store LIVE ─ production writes | High | dry-run default; explicit confirm; audit |
 | Id column declared wrongly | Medium | preflight verifies it (Task 2.1) |
+| Empty treated as "skip" → stale store cells | High | empty = `""`, always written (F7/F8) |
+| `variableNames` silently drops a needed var | Medium | verify response; fall back to full export (F9) |
 
 ## Definition of Done
 

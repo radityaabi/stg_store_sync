@@ -32,8 +32,8 @@
 - [ ] alias pairs human-approved; `strict` blocks on mismatch; id column verified
 
 ## Phase 3 — Data
-- [ ] 3.1 `core/fetcher.py` — pull + chunk + retry + EAV flatten
-- [ ] 3.2 `core/planner.py` — diff by match key → add/update/delete/conflicts (fail-closed)
+- [ ] 3.1 `core/fetcher.py` — pull + `variableNames` filter + chunk + retry + EAV flatten (empty→`""`) + verify + project
+- [ ] 3.2 `core/planner.py` — diff by match key → add/update/delete/conflicts (fail-closed); empty is a value
 
 ## Checkpoint: Data
 - [ ] Dry-run plan for real job shows only expected classifications
