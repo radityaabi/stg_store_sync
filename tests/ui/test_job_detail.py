@@ -148,3 +148,15 @@ def test_column_buttons_carry_design_icons_and_object_names():
     assert d.import_button.text().startswith("📥")
     assert d.export_button.text().startswith("📤")
     assert d.schedule_preview.objectName() == "SchedulePreview"
+
+
+def test_history_double_click_emits_run_activated():
+    d = JobDetail()
+    seen = []
+    d.run_activated.connect(seen.append)
+    d.set_history([
+        {"time": "t", "status": "ok", "counts": "1", "id": 42},
+        {"time": "t2", "status": "ok", "counts": "1", "id": 7},
+    ])
+    d.history_view.doubleClicked.emit(d.history_model.index(1, 0))
+    assert seen == [7]

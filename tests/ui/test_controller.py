@@ -2,10 +2,12 @@
 import os
 import threading
 import time
+import types
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QCoreApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from store_sync.core.config import (  # noqa: E402
     BindingConfig,
@@ -15,6 +17,7 @@ from store_sync.core.config import (  # noqa: E402
     StoreConfig,
     WriteConfig,
 )
+from store_sync.core.registry import JobEntry  # noqa: E402
 from store_sync.gui import Controller  # noqa: E402
 from store_sync.ui.main_window import MainWindow  # noqa: E402
 
@@ -227,3 +230,306 @@ def c_state_get(path, run_id):
         return st.get_run(run_id)
     finally:
         st.close()
+
+
+# -- Important 1: history / conflicts / run detail --------------------------
+
+def _seed_run(c, *, job="a", status="ok", counts=None, conflict=None):
+    """Record one finished run (+ optional conflict) via the controller's State."""
+    run_id = c.state.start_run(job=job, dry_run=True)
+    if conflict is not None:
+        c.state.record_conflict(run_id, match_value=conflict[0], reason=conflict[1])
+    c.state.finish_run(run_id, status=status, counts=counts or {"add": 1})
+    return run_id
+
+
+def test_open_job_fills_history_and_conflicts(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+    _seed_run(c, conflict=("7", "duplicate key"))
+    c._open_job("a")
+    assert w.job_detail.history_model.rowCount() >= 1
+    assert w.job_detail.conflicts_model.rowCount() == 1
+    row = w.job_detail.history_model._rows[0]
+    assert {"time", "status", "counts"} <= set(row)
+    c.stop()
+    w.close()
+
+
+def test_open_job_without_runs_is_empty(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+    c._open_job("a")
+    assert w.job_detail.history_model.rowCount() == 0
+    assert w.job_detail.conflicts_model.rowCount() == 0
+    c.stop()
+    w.close()
+
+
+def test_activate_history_row_loads_run_detail(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+    run_id = _seed_run(c, status="ok", counts={"add": 2},
+                       conflict=("9", "dup"))
+    c._open_job("a")
+    seen = []
+    w.run_activated.connect(seen.append)
+    w.job_detail.history_view.doubleClicked.emit(
+        w.job_detail.history_model.index(0, 0)
+    )
+    assert seen == [run_id]
+    assert w.stack.currentWidget() is w.run_detail
+    assert f"Run #{run_id}" in w.run_detail.summary_label.text()
+    assert w.run_detail.conflicts_model.rowCount() == 1
+    c.stop()
+    w.close()
+
+
+def test_run_activated_noop_for_missing_run(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._show_run(999999)  # unknown id must not raise or switch pages
+    assert w.stack.currentWidget() is w.dashboard
+    c.stop()
+    w.close()
+
+
+# -- Important 2: schedules overview ----------------------------------------
+
+def test_main_window_relays_schedules_requested():
+    w = MainWindow()
+    seen = []
+    w.schedules_requested.connect(lambda: seen.append(1))
+    w.dashboard.schedules_requested.emit()
+    assert seen == [1]
+    w.close()
+
+
+def test_controller_show_schedules_builds_rows(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="0 3 * * *", enabled=True)
+    c.save("b", a_job("b"), schedule="", enabled=False)
+    shown = {}
+
+    class FakeOverview:
+        def __init__(self, rows, parent=None):
+            shown["rows"] = rows
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr("store_sync.gui.ScheduleOverview", FakeOverview, raising=False)
+    c._show_schedules()  # must not raise
+    rows = shown["rows"]
+    assert len(rows) == 2
+    assert {"name", "cron", "enabled"} <= set(rows[0])
+    c.stop()
+    w.close()
+
+
+# -- Important 3: delete confirmation ---------------------------------------
+
+def test_confirm_delete_cancel_keeps_job(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+    monkeypatch.setattr(
+        "store_sync.gui.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.No),
+    )
+    c._confirm_delete("a")
+    assert [e.name for e in c.list_entries()] == ["a"]
+    c.stop()
+    w.close()
+
+
+def test_confirm_delete_yes_removes_job(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule="", enabled=False)
+    monkeypatch.setattr(
+        "store_sync.gui.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Yes),
+    )
+    c._confirm_delete("a")
+    assert c.list_entries() == []
+    c.stop()
+    w.close()
+
+
+# -- Important 4: off-thread preflight / mapping ----------------------------
+
+class _BlockingClient:
+    """Fake STG client whose `get_store` blocks until `release` is set."""
+
+    def __init__(self, release, calls):
+        self.session = types.SimpleNamespace(close=lambda: calls.append("closed"))
+        self.release = release
+        self.calls = calls
+
+    def get_store(self, store_id):
+        self.release.wait(3)
+        self.calls.append(("get_store", store_id))
+        return [{"No": 1}]
+
+    def get_survey_xml(self, survey_id):
+        self.calls.append(("get_survey_xml", survey_id))
+        return "<Survey/>"
+
+
+class _Report:
+    ok = True
+    table: list = []
+
+
+def _preflight_entry():
+    return JobEntry(
+        name="a", store_id=17620, id_column="No", survey_id="SURV",
+        match_source_var="SbjNum", match_store_col="SbjNum", window_days=0,
+        date_type="Upload", delete_policy="full_history", dry_run=True,
+        enabled=False, schedule="", column_count=1, last_status=None,
+        last_finished_at=None,
+    )
+
+
+def test_preflight_returns_immediately(tmp_path, monkeypatch):
+    """The GUI thread must not wait on the network fetch."""
+    import store_sync.gui as gui
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+
+    release = threading.Event()
+    calls: list = []
+    client = _BlockingClient(release, calls)
+    monkeypatch.setattr(c, "_client", lambda: client)
+
+    def fake_preflight(job, cl):
+        # Actually block on the (fake) network so a sync slot would hang.
+        cl.get_store(job.store.id)
+        return _Report(), {}
+
+    monkeypatch.setattr(gui, "run_preflight", fake_preflight)
+
+    start = time.monotonic()
+    c._preflight()
+    elapsed = time.monotonic() - start
+    # Slot returned without waiting on the blocking client.
+    assert elapsed < 1.0
+    assert calls == []  # fetch has not run on the GUI thread
+    assert "preflight" in w.status_label.text().lower()
+    assert c._preflight_thread is not None and c._preflight_thread.isRunning()
+
+    release.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and c._preflight_thread.isRunning():
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    assert w.job_detail.preflight_model.rowCount() == 0  # empty report table
+    assert "closed" in calls  # worker owned + closed its own session
+    c.stop()
+    assert c._preflight_thread is None  # joined on stop()
+    w.close()
+
+
+def test_preflight_worker_failure_reports_error(tmp_path, monkeypatch):
+    import store_sync.gui as gui
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    monkeypatch.setattr(c, "_client", lambda: _BlockingClient(threading.Event(), []))
+
+    def boom(job, client):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(gui, "run_preflight", boom)
+    c._preflight()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and c._preflight_thread.isRunning():
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    assert "error" in w.status_label.text().lower()
+    c.stop()
+    w.close()
+
+
+def test_mapping_import_off_thread(tmp_path, monkeypatch):
+    import store_sync.gui as gui
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+
+    release = threading.Event()
+    calls: list = []
+    client = _BlockingClient(release, calls)
+    monkeypatch.setattr(c, "_client", lambda: client)
+    monkeypatch.setattr(
+        "store_sync.gui.parse_mapping",
+        lambda path, store_cols, source_vars: (
+            [ColumnBinding("SbjNum", "No")], []
+        ),
+    )
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getOpenFileName",
+        staticmethod(lambda *a, **k: ("m.xlsx", "")),
+    )
+
+    c._import_mapping()
+    assert calls == []  # pool fetch has not happened on the GUI thread
+    release.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and c._mapping_thread.isRunning():
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    assert w.job_detail.binding_model.rowCount() == 1
+    assert "closed" in calls
+    c.stop()
+    assert c._mapping_thread is None
+    w.close()
+
+
+def test_mapping_export_off_thread(tmp_path, monkeypatch):
+    import store_sync.gui as gui
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    release = threading.Event()
+    calls: list = []
+    client = _BlockingClient(release, calls)
+    monkeypatch.setattr(c, "_client", lambda: client)
+    written: list = []
+    monkeypatch.setattr(
+        "store_sync.gui.export_template",
+        lambda path, store_cols: written.append((path, list(store_cols))),
+    )
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        staticmethod(lambda *a, **k: ("m.xlsx", "")),
+    )
+
+    c._export_mapping()
+    assert calls == []
+    release.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and c._mapping_thread.isRunning():
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    assert written and written[0][0] == "m.xlsx"
+    c.stop()
+    w.close()

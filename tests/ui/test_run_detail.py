@@ -168,3 +168,19 @@ def test_job_dialog_button_design_icons():
     assert dlg.ok_button.text().startswith("💾")
     assert dlg.ok_button.objectName() == "btn_primary"
     assert dlg.cancel_button.text() == "Cancel"
+
+
+# -- ScheduleOverview --------------------------------------------------------
+
+def test_schedule_overview_rows_and_model():
+    from store_sync.ui.dialogs import ScheduleOverview
+
+    dlg = ScheduleOverview([
+        {"name": "a", "cron": "0 3 * * *", "enabled": True},
+        {"name": "b", "cron": "", "enabled": False},
+    ])
+    assert [r["name"] for r in dlg.rows()] == ["a", "b"]
+    assert dlg.model.rowCount() == 2
+    from PySide6.QtCore import Qt
+    assert dlg.model.index(1, 2).data(Qt.DisplayRole) == "no"
+    assert dlg.close_button.text() == "Close"

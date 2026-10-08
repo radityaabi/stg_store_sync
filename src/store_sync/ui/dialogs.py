@@ -32,6 +32,7 @@ from store_sync.core.config import (
     WriteConfig,
 )
 from store_sync.ui.job_table_model import JobTableModel
+from store_sync.ui.models import _DictTableModel
 
 DELETE_POLICIES = [
     ("Full history", "full_history"),
@@ -175,3 +176,53 @@ def _int(text: str) -> int:
         return int(text.strip())
     except (ValueError, AttributeError):
         return 0
+
+
+class ScheduleOverview(QDialog):
+    """Read-only overview of the registry's schedules.
+
+    A minimal, honest surface for the dashboard's ⏰ Schedules button: it lists
+    every job's name, cron expression and enabled flag — no scheduling engine.
+    `rows()` exposes the same data for tests; `_DictTableModel` keeps the table
+    consistent with the rest of the app's read-only grid styling.
+    """
+
+    _FIELDS = ["name", "cron", "enabled"]
+
+    def __init__(self, rows: list[dict], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Enabled schedules")
+        self.resize(520, 360)
+        self._rows = list(rows)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+        self.model = _DictTableModel(self._FIELDS, self)
+        self.model.set_rows(
+            [
+                {
+                    "name": r.get("name", ""),
+                    "cron": r.get("cron", "") or "(manual only)",
+                    "enabled": "yes" if r.get("enabled") else "no",
+                }
+                for r in self._rows
+            ]
+        )
+        self.table = QTableView()
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        lay.addWidget(self.table, stretch=1)
+
+        buttons = QDialogButtonBox()
+        self.close_button = QPushButton("Close")
+        self.close_button.clicked.connect(self.accept)
+        buttons.addButton(self.close_button, QDialogButtonBox.AcceptRole)
+        lay.addWidget(buttons)
+
+    def rows(self) -> list[dict]:
+        """The raw schedule rows passed in (name · cron · enabled)."""
+        return list(self._rows)

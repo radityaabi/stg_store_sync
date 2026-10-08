@@ -54,6 +54,8 @@ class MainWindow(QMainWindow):
     export_requested = Signal()
     refresh_requested = Signal()
     back = Signal()
+    schedules_requested = Signal()
+    run_activated = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -115,6 +117,7 @@ class MainWindow(QMainWindow):
         self.dashboard.edit_requested.connect(self.edit_requested.emit)
         self.dashboard.delete_requested.connect(self.delete_requested.emit)
         self.dashboard.refresh_requested.connect(self.refresh_requested.emit)
+        self.dashboard.schedules_requested.connect(self.schedules_requested.emit)
         self.dashboard.job_activated.connect(self.show_job)
 
         # Job detail -> window proxies. `run_requested` carries no payload on
@@ -127,6 +130,7 @@ class MainWindow(QMainWindow):
         self.job_detail.stop_requested.connect(self.stop_requested.emit)
         self.job_detail.import_requested.connect(self.import_requested.emit)
         self.job_detail.export_requested.connect(self.export_requested.emit)
+        self.job_detail.run_activated.connect(self.run_activated.emit)
 
         # Run detail -> window proxies.
         self.run_detail.back.connect(self.back.emit)

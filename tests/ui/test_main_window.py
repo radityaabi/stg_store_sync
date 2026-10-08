@@ -96,6 +96,24 @@ def test_close_event_calls_stop_owned_threads():
     assert calls == [True]
 
 
+def test_run_activated_relayed_from_job_detail():
+    w = MainWindow()
+    seen = []
+    w.run_activated.connect(seen.append)
+    w.job_detail.run_activated.emit(5)
+    assert seen == [5]
+    w.close()
+
+
+def test_schedules_requested_relayed_from_dashboard():
+    w = MainWindow()
+    seen = []
+    w.schedules_requested.connect(lambda: seen.append(1))
+    w.dashboard.schedules_requested.emit()
+    assert seen == [1]
+    w.close()
+
+
 def test_header_object_names_and_status_recolor():
     w = MainWindow()
     assert w.breadcrumb_label.objectName() == "HeaderBreadcrumb"

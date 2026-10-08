@@ -49,9 +49,11 @@ class JobDetail(QWidget):
     stop_requested = Signal()
     import_requested = Signal()
     export_requested = Signal()
+    run_activated = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._history_ids: list[int] = []
         self._build_ui()
 
     # -- construction ------------------------------------------------------
@@ -187,6 +189,7 @@ class JobDetail(QWidget):
         lay.setContentsMargins(14, 12, 14, 12)
         self.history_model = _DictTableModel(["time", "status", "counts"], self)
         self.history_view = _dict_view(self.history_model)
+        self.history_view.doubleClicked.connect(self._on_history_double_click)
         lay.addWidget(self.history_view)
         return w
 
@@ -266,6 +269,7 @@ class JobDetail(QWidget):
 
     def set_history(self, rows: list[dict]) -> None:
         self.history_model.set_rows(rows)
+        self._history_ids = [r.get("id") for r in rows]
 
     def set_preflight(self, rows: list[dict]) -> None:
         self.preflight_model.set_rows(rows)
@@ -303,6 +307,13 @@ class JobDetail(QWidget):
         row = rows[0].row() if rows else self.binding_view.currentIndex().row()
         if row >= 0:
             self.binding_model.remove_row(row)
+
+    def _on_history_double_click(self, index) -> None:
+        row = index.row()
+        if 0 <= row < len(self._history_ids):
+            run_id = self._history_ids[row]
+            if run_id is not None:
+                self.run_activated.emit(int(run_id))
 
 
 def _dict_view(model: _DictTableModel) -> QTableView:
