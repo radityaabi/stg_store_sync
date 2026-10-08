@@ -11,6 +11,7 @@ marked `blocked` and **no write happens** (fail-closed, §4.4).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -20,6 +21,8 @@ from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
 from store_sync.core.planner import Plan, plan
 from store_sync.core.preflight import preflight
 from store_sync.core.writer import apply_plan
+
+logger = logging.getLogger(__name__)
 
 
 def _window_start(window_days: int) -> str | None:
@@ -237,6 +240,7 @@ def run_sync(
             errors=errors, run_id=run_id,
         )
     except Exception as e:  # noqa: BLE001 - guarantee a finished run
+        logger.exception("unexpected error during run_sync")
         errors.append(f"unexpected error: {e}")
         _finish("error", {})
         return SyncResult(

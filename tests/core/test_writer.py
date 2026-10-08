@@ -160,6 +160,26 @@ class TestTransportRetry:
         res = apply_plan(c, 17620, p, dry_run=False, max_retries=3, backoff=0)
         assert res.counts["update"] == 1
 
+    def test_delete_verify_transport_error_is_recorded(self):
+        import requests
+
+        class BadReadClient(FakeClient):
+            def get_store(self, store_id):
+                raise requests.ConnectionError("dropped")
+
+        c = BadReadClient(store_after=[{"No": 3}])
+        p = plan_with(
+            Action("add", "1", "No", 5, {"No": 5}),
+            Action("update", "2", "No", 2, {"No": 2}),
+            Action("delete", "3", "No", 3, {}),
+        )
+        res = apply_plan(c, 17620, p, dry_run=False, max_retries=2, backoff=0)
+        # must return normally, preserving the applied add/update counts
+        assert res.counts["add"] == 1
+        assert res.counts["update"] == 1
+        assert res.errors
+        assert 3 in res.unverified_deletes
+
 
 class TestThrottle:
     def test_throttle_called_between_writes(self, monkeypatch):

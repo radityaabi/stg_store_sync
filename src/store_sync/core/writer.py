@@ -91,13 +91,24 @@ def apply_plan(
 
     # Verify deletes by re-reading the store (F4: DeleteRow always says Done).
     if deleted_tags:
-        actual = client.get_store(store_id)
         id_col = id_col or "No"
-        present = {str(r.get(id_col)) for r in actual}
-        for match_value, tag in deleted_tags:
-            if str(tag) in present:
+        try:
+            actual = _retry(
+                client.get_store, store_id,
+                max_retries=max_retries, backoff=backoff,
+            )
+        except _WRITE_RETRYABLE as e:
+            # A dropped re-read must not escape: the writes already applied
+            # stand, and we simply cannot confirm the deletes this run.
+            res.errors.append(f"delete verification failed: {e}")
+            for _match_value, tag in deleted_tags:
                 res.unverified_deletes.append(tag)
-                res.errors.append(f"delete {match_value!r} (tag {tag}) not verified")
+        else:
+            present = {str(r.get(id_col)) for r in actual}
+            for match_value, tag in deleted_tags:
+                if str(tag) in present:
+                    res.unverified_deletes.append(tag)
+                    res.errors.append(f"delete {match_value!r} (tag {tag}) not verified")
 
     return res
 
