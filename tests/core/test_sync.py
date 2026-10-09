@@ -427,3 +427,13 @@ class TestPairingGate:
         assert res.status == "blocked"
         assert any("pull term" in e for e in res.errors)
 
+
+def test_run_preflight_never_reads_xml(st):
+    from store_sync.core.sync import run_preflight
+    called = []
+    c = FakeClient(store=store_rows(), subjects=subjects())
+    c.get_survey_xml = lambda sid: called.append(sid) or SURVEY_XML
+    report, terms = run_preflight(config(), client=c)
+    assert called == []
+    assert terms["T_QPM1_1"] == "QPM1"
+

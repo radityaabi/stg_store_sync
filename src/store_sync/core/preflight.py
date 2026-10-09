@@ -30,6 +30,28 @@ from store_sync.core.binding import (
 from store_sync.core.config import JobConfig
 
 
+def _pairing_errors(config) -> list[str]:
+    """Fail-closed gate: the job must be paired to the survey before any pull.
+
+    A missing index, a stale pairing (survey edited after pairing), or a column
+    with no recorded `pull_term` all block the run — the pairing must be an
+    explicit operator action, never guessed (spec §4.4).
+    """
+    errors: list[str] = []
+    src = config.source
+    if not src.survey_index:
+        errors.append("survey not paired — run Pairing in the Columns tab")
+    elif src.paired_survey_id != src.survey_id:
+        errors.append(
+            "survey pairing is stale — the survey changed since pairing; "
+            "re-run Pairing"
+        )
+    for c in config.binding.columns:
+        if not c.pull_term:
+            errors.append(f"column {c.store_col!r} has no pull term — re-run Pairing")
+    return errors
+
+
 @dataclass
 class ReviewRow:
     store_col: str
@@ -189,5 +211,8 @@ def preflight(
         rep.probe = noop_probe(client, store_id or config.store.id, row)
         if not rep.probe.ok:
             rep.errors.append(f"id-column probe failed: {rep.probe.message}")
+
+    # pairing gate (fail closed: unpaired / stale / empty pull_term) ---------
+    rep.errors.extend(_pairing_errors(config))
 
     return rep

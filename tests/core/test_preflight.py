@@ -13,7 +13,16 @@ from store_sync.core.config import (
     StoreConfig,
     WriteConfig,
 )
+from store_sync.core.fetcher import parse_survey_index
 from store_sync.core.preflight import ReviewRow, preflight
+
+_XML = ("<Survey><SQ><QuestionID>762</QuestionID><VariableName>QPM1</VariableName></SQ>"
+        "<STo><QuestionID>762</QuestionID><VariableName>T_QPM1_1</VariableName></STo>"
+        "<SQ><QuestionID>900</QuestionID><VariableName>Q32</VariableName></SQ></Survey>")
+
+
+def _paired_source():
+    return SourceConfig("S", survey_index=parse_survey_index(_XML), paired_survey_id="S")
 
 
 def store_rows():
@@ -36,16 +45,16 @@ def make_config(*, id_column="uniqueID", mode="mapped", columns=None):
     return JobConfig(
         job="link1",
         store=StoreConfig(id=17417, id_column=id_column),
-        source=SourceConfig(survey_id="S"),
+        source=_paired_source(),
         binding=BindingConfig(
             mode=mode,
             match=ColumnBinding("SbjNum", "SbjNum"),
             columns=columns
             if columns is not None
             else [
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("T_QPM1_3", "I8a_1"),
-                ColumnBinding("Q32", "Q32"),
+                ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+                ColumnBinding("T_QPM1_3", "I8a_1", pull_term="QPM1"),
+                ColumnBinding("Q32", "Q32", pull_term="Q32"),
             ],
         ),
         write=WriteConfig(),
@@ -56,10 +65,10 @@ def minimal_config():
     return JobConfig(
         job="j",
         store=StoreConfig(id=1, id_column="No"),
-        source=SourceConfig(survey_id="S"),
+        source=SourceConfig("S", survey_index={"V": "V"}, paired_survey_id="S"),
         binding=BindingConfig(
             match=ColumnBinding("SbjNum", "SbjNum"),
-            columns=[ColumnBinding("V", "A")],
+            columns=[ColumnBinding("V", "A", pull_term="V")],
         ),
         write=WriteConfig(),
     )
@@ -180,6 +189,14 @@ class TestChecks:
         assert rep.ok is False
 
 
+def test_unpaired_config_blocks():
+    cfg = make_config()
+    cfg.source = SourceConfig("S")  # unpaired
+    rep = preflight(store_rows=store_rows(), source_records=source_records(), config=cfg)
+    assert rep.ok is False
+    assert any("not paired" in e for e in rep.errors)
+
+
 class TestEmptyStore:
     def test_empty_store_reports_no_rows(self):
         cfg = minimal_config()
@@ -204,7 +221,7 @@ class TestStrict:
     def test_strict_identical_names_passes(self):
         cfg = make_config(
             mode="strict",
-            columns=[ColumnBinding("Q32", "Q32")],
+            columns=[ColumnBinding("Q32", "Q32", pull_term="Q32")],
         )
         rep = preflight(
             store_rows=store_rows(), source_records=source_records(), config=cfg

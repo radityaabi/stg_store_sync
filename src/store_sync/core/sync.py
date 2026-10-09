@@ -18,9 +18,9 @@ import logging
 from dataclasses import dataclass, field
 
 from store_sync.core.config import JobConfig
-from store_sync.core.fetcher import derive_pull_terms, parse_survey_index, pull
+from store_sync.core.fetcher import derive_pull_terms, pull
 from store_sync.core.planner import Plan, plan
-from store_sync.core.preflight import preflight
+from store_sync.core.preflight import _pairing_errors, preflight
 from store_sync.core.stg_client import Cancelled
 from store_sync.core.writer import apply_plan
 
@@ -54,28 +54,6 @@ def _readiness_errors(config, store_rows, source_records) -> list[str]:
     return [e for e in report.errors if e != source_dup]
 
 
-def _pairing_errors(config) -> list[str]:
-    """Fail-closed gate: the job must be paired to the survey before any pull.
-
-    A missing index, a stale pairing (survey edited after pairing), or a column
-    with no recorded `pull_term` all block the run — the pairing must be an
-    explicit operator action, never guessed (spec §4.4).
-    """
-    errors: list[str] = []
-    src = config.source
-    if not src.survey_index:
-        errors.append("survey not paired — run Pairing in the Columns tab")
-    elif src.paired_survey_id != src.survey_id:
-        errors.append(
-            "survey pairing is stale — the survey changed since pairing; "
-            "re-run Pairing"
-        )
-    for c in config.binding.columns:
-        if not c.pull_term:
-            errors.append(f"column {c.store_col!r} has no pull term — re-run Pairing")
-    return errors
-
-
 @dataclass
 class SyncResult:
     plan: Plan
@@ -91,9 +69,10 @@ def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
     """Fetch a store snapshot + a small pull sample and run the binding gate.
 
     Returns `(report, pull_terms)` where `pull_terms` maps `source_var → base`
-    for the GUI's read-only pull-term column.
+    for the GUI's read-only pull-term column. The survey index comes from the
+    cached `config.source.survey_index`; the survey XML is never fetched here.
     """
-    index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
+    index = dict(config.source.survey_index)
     columns = config.binding.columns
     terms, _ = derive_pull_terms(
         [c.source_var for c in columns],
