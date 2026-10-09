@@ -14,6 +14,7 @@ from store_sync.core.config import (
     StoreConfig,
     WriteConfig,
 )
+from store_sync.core.fetcher import parse_survey_index
 from store_sync.core.state import State
 from store_sync.core.stg_client import STGError
 from store_sync.core.sync import run_sync
@@ -26,27 +27,28 @@ SURVEY_XML = """<?xml version="1.0"?>
 </Survey>
 """
 
+_PAIRED_INDEX = parse_survey_index(SURVEY_XML)  # {"T_QPM1_1": "QPM1", "Q32": "Q32"}
 
-def config(
-    *,
-    dry_run=True,
-    id_column="No",
-    mode="mapped",
-    columns=None,
-):
+
+def config(*, dry_run=True, id_column="No", mode="mapped", columns=None, paired=True):
+    if columns is None:
+        columns = [
+            ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+            ColumnBinding("Q32", "Q32", pull_term="Q32"),
+        ]
+    source = SourceConfig(
+        survey_id="SURV",
+        survey_index=(_PAIRED_INDEX if paired else {}),
+        paired_survey_id=("SURV" if paired else ""),
+    )
     return JobConfig(
         job="link1",
         store=StoreConfig(id=17620, id_column=id_column),
-        source=SourceConfig(survey_id="SURV"),
+        source=source,
         binding=BindingConfig(
             mode=mode,
             match=ColumnBinding("SbjNum", "SbjNum"),
-            columns=columns
-            if columns is not None
-            else [
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("Q32", "Q32"),
-            ],
+            columns=columns,
         ),
         write=WriteConfig(dry_run=dry_run),
     )
@@ -238,7 +240,7 @@ class TestProgress:
         run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
         stages = [e["stage"] for e in events]
         assert stages == [
-            "start", "survey", "ids", "pull", "store",
+            "start", "ids", "pull", "store",
             "preflight", "plan", "apply", "applied", "proposals", "done",
         ]
 
@@ -251,7 +253,7 @@ class TestProgress:
         )
         stages = [e["stage"] for e in events]
         assert stages == [
-            "start", "survey", "ids", "pull", "store",
+            "start", "ids", "pull", "store",
             "preflight", "plan", "apply", "applied", "proposals", "done",
         ]
 
@@ -336,8 +338,8 @@ class TestReadiness:
         cfg = config(
             dry_run=False,
             columns=[
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("Q32", "NOT_A_STORE_COL"),
+                ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+                ColumnBinding("Q32", "NOT_A_STORE_COL", pull_term="Q32"),
             ],
         )
         c = FakeClient(store=store_rows(), subjects=subjects())
@@ -350,8 +352,8 @@ class TestReadiness:
         cfg = config(
             dry_run=False,
             columns=[
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("NOT_A_SOURCE_VAR", "Q32"),
+                ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+                ColumnBinding("NOT_A_SOURCE_VAR", "Q32", pull_term="Q32"),
             ],
         )
         c = FakeClient(store=store_rows(), subjects=subjects())
@@ -383,12 +385,45 @@ class TestReadiness:
         cfg = config(
             dry_run=True,
             columns=[
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("PHONE", "Phone"),
+                ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+                ColumnBinding("PHONE", "Phone", pull_term="PHONE"),
             ],
         )
         c = FakeClient(store=rows, subjects=subs)
         res = run_sync(cfg, client=c, state=st)
         assert res.status != "blocked"
         assert res.errors == []
+
+
+class TestPairingGate:
+    def test_unpaired_job_blocks_without_xml(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False, paired=False), client=c, state=st)
+        assert res.status == "blocked"
+        assert any("not paired" in e for e in res.errors)
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
+
+    def test_run_never_calls_get_survey_xml(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        called = []
+        c.get_survey_xml = lambda sid: called.append(sid) or SURVEY_XML
+        run_sync(config(dry_run=True), client=c, state=st)
+        assert called == []
+
+    def test_stale_pairing_blocks(self, st):
+        cfg = config(dry_run=False)
+        cfg.source.survey_id = "SURV2"  # edited after pairing
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status == "blocked"
+        assert any("stale" in e for e in res.errors)
+
+    def test_column_without_pull_term_blocks(self, st):
+        cfg = config(dry_run=False, columns=[
+            ColumnBinding("T_QPM1_1", "I7_1_2", pull_term=""),  # never paired
+        ])
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status == "blocked"
+        assert any("pull term" in e for e in res.errors)
 

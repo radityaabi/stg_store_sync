@@ -19,6 +19,7 @@ from store_sync.core.config import (
     WriteConfig,
 )
 from store_sync.core.state import State
+from store_sync.core.fetcher import parse_survey_index
 from store_sync.core.sync import run_sync
 from store_sync.core.writer import apply_updates
 from store_sync.core.planner import Action
@@ -31,6 +32,8 @@ SURVEY_XML = """<?xml version="1.0"?>
   <SQ><QuestionID>900</QuestionID><VariableName>Q32</VariableName></SQ>
 </Survey>
 """
+
+_PAIRED_INDEX = parse_survey_index(SURVEY_XML)  # {"T_QPM1_1": "QPM1", "Q32": "Q32"}
 
 
 def subj(sid, pairs):
@@ -72,12 +75,14 @@ def config(*, dry_run):
     return JobConfig(
         job="acc",
         store=StoreConfig(17620, "No"),
-        source=SourceConfig("SURV"),
+        source=SourceConfig(
+            "SURV", survey_index=_PAIRED_INDEX, paired_survey_id="SURV",
+        ),
         binding=BindingConfig(
             match=ColumnBinding("SbjNum", "SbjNum"),
             columns=[
-                ColumnBinding("T_QPM1_1", "I7_1_2"),
-                ColumnBinding("Q32", "Q32"),
+                ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+                ColumnBinding("Q32", "Q32", pull_term="Q32"),
             ],
         ),
         write=WriteConfig(dry_run=dry_run),

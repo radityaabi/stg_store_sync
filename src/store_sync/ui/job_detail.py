@@ -481,7 +481,6 @@ class JobDetail(QWidget):
 
 
 _STAGE_TEXT = {
-    "survey": "reading survey definition…",
     "ids": "listing interviews",
     "pull": "pulling interview data",
     "store": "reading store",

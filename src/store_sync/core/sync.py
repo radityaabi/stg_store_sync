@@ -1,6 +1,6 @@
 """End-to-end orchestrator: run one sync job (spec §7.2).
 
-    survey XML -> index -> derive pull terms -> pull (filter/fallback)
+    cached survey index -> derive pull terms -> pull (filter/fallback)
     store GetStore -> plan (diff by match key)
     writer.apply (adds only; or dry-run) -> record update proposals
     state.record_run
@@ -52,6 +52,28 @@ def _readiness_errors(config, store_rows, source_records) -> list[str]:
         f"match key {m.source_var!r} is not unique in the pull" if m else None
     )
     return [e for e in report.errors if e != source_dup]
+
+
+def _pairing_errors(config) -> list[str]:
+    """Fail-closed gate: the job must be paired to the survey before any pull.
+
+    A missing index, a stale pairing (survey edited after pairing), or a column
+    with no recorded `pull_term` all block the run — the pairing must be an
+    explicit operator action, never guessed (spec §4.4).
+    """
+    errors: list[str] = []
+    src = config.source
+    if not src.survey_index:
+        errors.append("survey not paired — run Pairing in the Columns tab")
+    elif src.paired_survey_id != src.survey_id:
+        errors.append(
+            "survey pairing is stale — the survey changed since pairing; "
+            "re-run Pairing"
+        )
+    for c in config.binding.columns:
+        if not c.pull_term:
+            errors.append(f"column {c.store_col!r} has no pull term — re-run Pairing")
+    return errors
 
 
 @dataclass
@@ -122,8 +144,8 @@ def run_sync(
     and any writes already applied stay tracked.
 
     `progress` is an optional callable receiving one dict per pipeline stage
-    (``{"stage": "survey"|"ids"|"pull"|"store"|"preflight"|"plan"|"apply"|"done",
-    ...}``; extra keys carry stage payloads like ``total`` or ``counts``). It is
+    (``{"stage": "ids"|"pull"|"store"|"preflight"|"plan"|"apply"|"done", ...}``;
+    extra keys carry stage payloads like ``total`` or ``counts``). It is
     called synchronously from the worker thread — the GUI marshals it through a
     queued signal (see ``Controller._ProgressBridge``).
     """
@@ -154,9 +176,20 @@ def run_sync(
     p = Plan()
 
     try:
+        # 0) pairing gate (fail closed before any pull/write) ---------------
+        pairing_errs = _pairing_errors(config)
+        if pairing_errs:
+            for err in pairing_errs:
+                state.record_conflict(run_id, match_value=None, reason=err)
+            _finish("blocked", {})
+            _emit("done", status="blocked", counts={}, dry_run=dry_run)
+            return SyncResult(
+                plan=p, dry_run=dry_run, status="blocked", counts={},
+                errors=list(pairing_errs), run_id=run_id,
+            )
+
         # 1) survey index + pull ---------------------------------------------
-        _emit("survey")
-        index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
+        index = dict(config.source.survey_index)
         subject_ids = client.survey_interview_ids(config.source.survey_id)
         _emit("ids", total=len(subject_ids))
         match = config.binding.match

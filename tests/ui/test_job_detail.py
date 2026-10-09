@@ -183,7 +183,6 @@ def test_run_progress_text_per_stage():
     d = JobDetail()
     d.load(E(), a_job())
     for ev in (
-        {"stage": "survey"},
         {"stage": "ids", "total": 296},
         {"stage": "pull", "total": 296},
         {"stage": "store", "total": 1},
@@ -195,19 +194,18 @@ def test_run_progress_text_per_stage():
         d.set_run_progress(ev)
     text = d.progress_text.toPlainText()
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    assert len(lines) == 8
-    assert "survey" in lines[0]
-    assert "296" in lines[1] and "interview" in lines[1]
-    assert "plan" in lines[4].lower()
-    assert "dry run" in lines[6].lower()
-    assert "ok" in lines[7].lower()
-    assert "dry run" in lines[7].lower()  # the finished line flags simulation too
+    assert len(lines) == 7
+    assert "296" in lines[0] and "interview" in lines[0]
+    assert "plan" in lines[3].lower()
+    assert "dry run" in lines[5].lower()
+    assert "ok" in lines[6].lower()
+    assert "dry run" in lines[6].lower()  # the finished line flags simulation too
 
 
 def test_run_progress_cleared_and_hidden():
     d = JobDetail()
     d.load(E(), a_job())
-    d.set_run_progress({"stage": "survey"})
+    d.set_run_progress({"stage": "ids", "total": 1})
     d.clear_run_progress()
     assert d.progress_text.toPlainText() == ""
     assert d.progress_panel.isHidden()
