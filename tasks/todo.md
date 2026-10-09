@@ -88,5 +88,21 @@
 - [x] 8.12 End-to-end acceptance on `DUMMY_AUTO_STORE`
 - [x] 8.13 (prereq) Fix `test_run_missing_creds_is_1` isolation (`.env` + `load_dotenv`)
 
+## Phase 9 — Survey pairing out of the run ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-09-survey-pairing-separation-design.md`
+> Plan: `docs/superpowers/plans/2026-10-09-survey-pairing-separation.md`
+> The survey definition (`GetSurveyXML`) is read once, by the GUI Pairing action
+> (prep); runs read the cached index and block when unpaired/stale. No implicit
+> XML fetch, no full-export fallback.
+
+- [x] 9.1 `core/config.py` — `ColumnBinding.pull_term` + `SourceConfig.survey_index`/`paired_survey_id`
+- [x] 9.2 `core/registry.py` — persist pairing fields + migrate legacy rows
+- [x] 9.3 `core/fetcher.py` — `pair_columns` helper from a cached index
+- [x] 9.4 `core/sync.py` — `run_sync` reads the cached index, drops the XML fetch, adds the pairing gate
+- [x] 9.5 `core/sync.py` — `run_preflight` uses the cached index + unpaired error
+- [x] 9.6 `ui/job_table_model.py` + `ui/job_detail.py` — stored pull term + Pairing button
+- [x] 9.7 `gui.py` + `ui/main_window.py` — pairing worker, wiring, carry pairing on save
+- [x] 9.8 Docs (invariants, vocabulary, README, ledger) + full acceptance
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

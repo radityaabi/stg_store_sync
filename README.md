@@ -18,6 +18,9 @@ the STG REST API.
   not exist**.
 - Columns are mapped by an operator-approved `source → store` alias pair (or an
   **Excel mapping upload**); the pull term is derived, not hand-entered.
+- **Pairing**: a job must be paired in the **Columns** tab (the 🔗 action) before
+  its first run; pairing reads the survey definition once and caches the pull
+  terms. An unpaired job is blocked.
 - GUI with a **Sync** button; dry-run is the default.
 
 ## Status

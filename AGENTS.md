@@ -88,6 +88,10 @@ Violating any of these corrupts production data or the safety model:
 10. **One global run queue** — exactly one sync at a time; never run two.
 11. **Headless = add-only.** CLI/scheduler runs write adds and record proposals;
     they never apply updates.
+12. **The survey definition is read only by the Pairing action (prep), never
+    during a run.** A job with no pairing — empty `survey_index`,
+    `paired_survey_id != survey_id`, or any empty `pull_term` — is `blocked`
+    before any write; there is no implicit XML fetch and no full-export fallback.
 
 ## Docs — source of truth
 

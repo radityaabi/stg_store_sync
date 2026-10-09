@@ -79,6 +79,13 @@ The token given to `SimpleExport`'s `variableNames` filter (`QPM1`, not
 input.
 _Avoid_: filter term, base name (prefer pull term).
 
+**Pairing**:
+The one-time prep action that reads the survey definition and records, per
+column, the question-level pull term (`QPM1`), plus the cached survey index.
+Distinct from a run: it happens at prep, once, not on every sync. An unpaired
+job is blocked.
+_Avoid_: mapping, bind, sync.
+
 **Projection**:
 Selecting the configured columns out of a pulled record into the store shape;
 the source of truth after any pull.
