@@ -220,3 +220,21 @@ class TestPull:
         )
         rec = res.projected[0]
         assert rec == {"I7_1_2": "A", "I8a_1": "0811", "OTHER": ""}
+
+
+# --- pairing ----------------------------------------------------------------
+
+class TestPairColumns:
+    def test_fills_terms_for_resolvable_vars(self):
+        from store_sync.core.fetcher import pair_columns
+        idx = parse_survey_index(SURVEY_XML)
+        terms, unresolved = pair_columns(["T_QPM1_1", "T_QPM1_3", "Q32"], idx)
+        assert terms == {"T_QPM1_1": "QPM1", "T_QPM1_3": "QPM1", "Q32": "Q32"}
+        assert unresolved == []
+
+    def test_unresolved_var_gets_empty_term_and_is_reported(self):
+        from store_sync.core.fetcher import pair_columns
+        idx = parse_survey_index(SURVEY_XML)
+        terms, unresolved = pair_columns(["T_QPM1_1", "I_351_Q46a"], idx)
+        assert terms == {"T_QPM1_1": "QPM1", "I_351_Q46a": ""}
+        assert unresolved == ["I_351_Q46a"]

@@ -121,6 +121,23 @@ def derive_pull_terms(
     return terms, unresolved
 
 
+def pair_columns(
+    source_vars: Iterable[str], index: dict[str, str]
+) -> tuple[dict[str, str], list[str]]:
+    """Per-column pull terms from a cached index; unresolved vars reported.
+
+    `pull_term` is `index[var]` when known, else `""` — never a guessed term.
+    """
+    terms: dict[str, str] = {}
+    unresolved: list[str] = []
+    for var in source_vars:
+        base = index.get(var, "")
+        terms[var] = base
+        if not base:
+            unresolved.append(var)
+    return terms, unresolved
+
+
 # --- flatten ----------------------------------------------------------------
 
 
