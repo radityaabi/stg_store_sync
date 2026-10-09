@@ -196,3 +196,9 @@ def test_source_config_defaults_unpaired():
     s = SourceConfig.from_dict({"survey_id": "SURV"})
     assert s.survey_index == {}
     assert s.paired_survey_id == ""
+
+
+def test_source_config_null_survey_index_is_empty():
+    # A hand-edited YAML `survey_index:` (blank) loads as None; must not crash.
+    s = SourceConfig.from_dict({"survey_id": "SURV", "survey_index": None})
+    assert s.survey_index == {}

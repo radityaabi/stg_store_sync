@@ -60,7 +60,7 @@ class SourceConfig:
         # pull is always the survey's full history.
         return cls(
             survey_id=str(d.get("survey_id", "")),
-            survey_index=dict(d.get("survey_index", {})),
+            survey_index=dict(d.get("survey_index") or {}),
             paired_survey_id=str(d.get("paired_survey_id", "")),
         )
 
