@@ -122,6 +122,18 @@ class TestTable:
         )
         assert rep.table[0].status == "missing_source_var"
 
+    def test_var_in_index_but_absent_from_sample_is_ok(self):
+        # Empty answers are ABSENT from the export (probe F7): a valid, paired
+        # var can be missing from the sample. The cached index proves it real,
+        # so absence from the sample alone must NOT block the job.
+        cfg = make_config(columns=[ColumnBinding("T_QPM1_9", "I8a_1", pull_term="QPM1")])
+        cfg.source.survey_index["T_QPM1_9"] = "QPM1"
+        rep = preflight(
+            store_rows=store_rows(), source_records=source_records(), config=cfg
+        )
+        assert rep.ok is True
+        assert rep.table[0].status != "missing_source_var"
+
     def test_missing_store_col_flagged(self):
         cfg = make_config(columns=[ColumnBinding("Q32", "NOT_A_COL")])
         rep = preflight(

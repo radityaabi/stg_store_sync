@@ -427,6 +427,20 @@ class TestPairingGate:
         assert res.status == "blocked"
         assert any("pull term" in e for e in res.errors)
 
+    def test_paired_var_absent_from_pull_does_not_block(self, st):
+        # A paired var that is empty across every sampled subject is ABSENT from
+        # the export (probe F7), not an error. The cached index proves it real,
+        # so the run must proceed (empty source values are still written).
+        cfg = config(dry_run=True, columns=[
+            ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1"),
+            ColumnBinding("T_QPM1_9", "Q32", pull_term="QPM1"),  # in index, absent from pull
+        ])
+        cfg.source.survey_index["T_QPM1_9"] = "QPM1"
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(cfg, client=c, state=st)
+        assert res.status != "blocked"
+        assert not any("not present in the pull" in e for e in res.errors)
+
 
 def test_run_preflight_never_reads_xml(st):
     from store_sync.core.sync import run_preflight

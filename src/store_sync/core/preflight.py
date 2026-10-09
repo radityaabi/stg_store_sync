@@ -93,6 +93,11 @@ def preflight(
     if not store_rows:
         rep.errors.append("store has no rows")
 
+    # Cached survey index: proves a `source_var` is real even when it is absent
+    # from the (small) pull sample — an empty answer is ABSENT from the export
+    # (probe F7), so sample-absence alone is not an error.
+    index = dict(config.source.survey_index)
+
     # per-column review table ------------------------------------------------
     configured = config.binding.columns
     match = config.binding.match
@@ -134,14 +139,18 @@ def preflight(
                 f"store column {c.store_col!r} not present on the store"
             )
             continue
-        if c.source_var not in source_vars_present:
+        if c.source_var not in source_vars_present and c.source_var not in index:
+            # Absent from the sample is normal: an empty answer is ABSENT from
+            # the export (probe F7), so a valid var can be missing from a small
+            # sample. Only a var the survey index does not know is an error.
             rep.table.append(
                 ReviewRow(
                     c.store_col, c.source_var, 0, len(store_rows), 0.0, "missing_source_var"
                 )
             )
             rep.errors.append(
-                f"source var {c.source_var!r} not present in the pull sample"
+                f"source var {c.source_var!r} not present in the pull sample "
+                "or the survey index"
             )
             continue
 
