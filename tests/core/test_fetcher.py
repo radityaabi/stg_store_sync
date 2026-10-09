@@ -42,6 +42,29 @@ SURVEY_XML = """<?xml version="1.0"?>
 </Survey>
 """
 
+# A grid/matrix survey: a question Q2 (id 603) whose answers are `<SAN>`
+# blocks (not `<STo>`), each optionally carrying an `OtherSpecVarName`
+# (`Q2_2_TEXT`). STG emits `<SAN>` for grid answers — a real survey uses tens
+# of thousands of them — so a parser that reads only `<STo>` resolves none.
+GRID_XML = """<?xml version="1.0"?>
+<Survey>
+  <SQ>
+    <QuestionID>603</QuestionID>
+    <VariableName>Q2</VariableName>
+    <OtherSpecVarName>Q2_OTHER</OtherSpecVarName>
+  </SQ>
+  <SAN>
+    <QuestionID>603</QuestionID>
+    <VariableName>Q2_1</VariableName>
+  </SAN>
+  <SAN>
+    <QuestionID>603</QuestionID>
+    <VariableName>Q2_2</VariableName>
+    <OtherSpecVarName>Q2_2_TEXT</OtherSpecVarName>
+  </SAN>
+</Survey>
+"""
+
 
 def subject(sid, pairs):
     return {"SubjectID": sid, "Columns": [{"Var": v, "Value": x} for v, x in pairs]}
@@ -62,6 +85,19 @@ class TestParseSurveyIndex:
 
     def test_accepts_bytes(self):
         assert parse_survey_index(SURVEY_XML.encode())["T_QPM1_1"] == "QPM1"
+
+    def test_san_grid_answers_map_to_question_base(self):
+        # Grid/matrix answers live in <SAN>, not <STo>.
+        idx = parse_survey_index(GRID_XML)
+        assert idx["Q2_1"] == "Q2"
+        assert idx["Q2_2"] == "Q2"
+
+    def test_otherspec_var_maps_to_owning_question_base(self):
+        # The "other, specify" text var is exportable and must resolve to the
+        # question it belongs to, not stay unresolved.
+        idx = parse_survey_index(GRID_XML)
+        assert idx["Q2_2_TEXT"] == "Q2"
+        assert idx["Q2_OTHER"] == "Q2"
 
 
 # --- derivation -------------------------------------------------------------

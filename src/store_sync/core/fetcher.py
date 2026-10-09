@@ -41,32 +41,43 @@ def parse_survey_index(xml: str | bytes) -> dict[str, str]:
     """Map every source var to its question-level base name.
 
     Questions are `SQ` blocks (`QuestionID` + `VariableName`); answers are `STo`
-    blocks referencing a `QuestionID`. Returns `{var: base}` for answer vars and
-    for question base names themselves (`Q32 → Q32`).
+    blocks referencing a `QuestionID`. Grid/matrix answers use `SAN` blocks
+    instead (a real survey emits tens of thousands), so both are read. An
+    "other, specify" text var (`OtherSpecVarName`, e.g. `Q2_2_TEXT`) is
+    exportable and maps to its owning question's base name. Returns
+    `{var: base}` for answer vars, other-specify vars, and the question base
+    names themselves (`Q32 → Q32`).
     """
     if isinstance(xml, bytes):
         xml = xml.decode("utf-8", errors="replace")
     q_var: dict[str, str] = {}
     answer_pairs: list[tuple[str, str]] = []
+    other_pairs: list[tuple[str, str]] = []
 
     stack: list[dict] = []
     for event, elem in ET.iterparse(_iter(xml), events=("start", "end")):
         if event == "start":
-            if elem.tag in ("SQ", "STo"):
-                stack.append({"tag": elem.tag, "qid": None, "var": None})
+            if elem.tag in ("SQ", "STo", "SAN"):
+                stack.append({"tag": elem.tag, "qid": None, "var": None, "other": None})
         else:
             if stack:
                 if elem.tag == "QuestionID":
                     stack[-1]["qid"] = (elem.text or "").strip()
                 elif elem.tag == "VariableName":
                     stack[-1]["var"] = (elem.text or "").strip()
-            if elem.tag in ("SQ", "STo") and stack:
+                elif elem.tag == "OtherSpecVarName":
+                    stack[-1]["other"] = (elem.text or "").strip()
+            if elem.tag in ("SQ", "STo", "SAN") and stack:
                 ctx = stack.pop()
                 if ctx["tag"] == "SQ":
                     if ctx["qid"] and ctx["var"]:
                         q_var[ctx["qid"]] = ctx["var"]
+                    if ctx["other"] and ctx["var"]:
+                        other_pairs.append((ctx["other"], ctx["var"]))
                 elif ctx["qid"] and ctx["var"]:
                     answer_pairs.append((ctx["qid"], ctx["var"]))
+                    if ctx["other"]:
+                        other_pairs.append((ctx["other"], ctx["var"]))
 
     index: dict[str, str] = {base: base for base in set(q_var.values())}
     for qid, av in answer_pairs:
@@ -75,6 +86,8 @@ def parse_survey_index(xml: str | bytes) -> dict[str, str]:
             index[av] = base
         else:
             index.setdefault(av, av)
+    for other, owner in other_pairs:
+        index.setdefault(other, index.get(owner, owner))
     return index
 
 
