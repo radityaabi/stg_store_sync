@@ -97,14 +97,17 @@ class SourceConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "survey_id": self.survey_id,
-            "survey_index": dict(self.survey_index),
-            "paired_survey_id": self.paired_survey_id,
-        }
+        out = {"survey_id": self.survey_id}
+        if self.survey_index:
+            out["survey_index"] = dict(self.survey_index)
+        if self.paired_survey_id:
+            out["paired_survey_id"] = self.paired_survey_id
+        return out
 ```
 
-Add `pull_term` to `ColumnBinding` (last field, default `""`), include it in `from_dict` (`str(d.get("pull_term", ""))`) and `to_dict`.
+`to_dict` emits the new keys **only when truthy** (mirrors `WriteConfig.normalize`): an unconditional emission would break `test_to_dict_is_stable`, which asserts exact dict equality with the legacy shape. `from_dict` still reads both with safe defaults.
+
+Add `pull_term` to `ColumnBinding` (last field, default `""`); `from_dict` reads `str(d.get("pull_term", ""))`; `to_dict` includes `pull_term` **only when truthy** (`out["pull_term"] = self.pull_term` guarded), for the same reason.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
