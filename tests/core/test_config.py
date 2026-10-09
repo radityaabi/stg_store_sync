@@ -173,3 +173,26 @@ class TestEnums:
         assert SourceConfig(survey_id="s").survey_id == "s"
         assert BindingConfig(match=None, columns=[]).mode == "mapped"
         assert WriteConfig().dry_run is True
+
+
+def test_column_binding_pull_term_roundtrip():
+    c = ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1")
+    assert ColumnBinding.from_dict(c.to_dict()) == c
+    assert c.to_dict()["pull_term"] == "QPM1"
+
+
+def test_column_binding_pull_term_defaults_empty():
+    assert ColumnBinding.from_dict(
+        {"source_var": "v", "store_col": "c"}
+    ).pull_term == ""
+
+
+def test_source_config_survey_index_roundtrip():
+    s = SourceConfig("SURV", survey_index={"T_QPM1_1": "QPM1"}, paired_survey_id="SURV")
+    assert SourceConfig.from_dict(s.to_dict()) == s
+
+
+def test_source_config_defaults_unpaired():
+    s = SourceConfig.from_dict({"survey_id": "SURV"})
+    assert s.survey_index == {}
+    assert s.paired_survey_id == ""

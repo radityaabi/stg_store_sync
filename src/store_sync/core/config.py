@@ -51,15 +51,26 @@ class StoreConfig:
 @dataclass
 class SourceConfig:
     survey_id: str
+    survey_index: dict[str, str] = field(default_factory=dict)
+    paired_survey_id: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SourceConfig":
         # Legacy `window_days`/`date_type` keys are deliberately ignored: the
         # pull is always the survey's full history.
-        return cls(survey_id=str(d.get("survey_id", "")))
+        return cls(
+            survey_id=str(d.get("survey_id", "")),
+            survey_index=dict(d.get("survey_index", {})),
+            paired_survey_id=str(d.get("paired_survey_id", "")),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"survey_id": self.survey_id}
+        out = {"survey_id": self.survey_id}
+        if self.survey_index:
+            out["survey_index"] = dict(self.survey_index)
+        if self.paired_survey_id:
+            out["paired_survey_id"] = self.paired_survey_id
+        return out
 
 
 @dataclass
@@ -67,12 +78,14 @@ class ColumnBinding:
     """One column: which survey variable feeds which store column.
 
     `source_var` is the answer-level variable (e.g. T_QPM1_1); it is used for
-    projection. The pull term is derived, not stored here.
+    projection. `pull_term` is the question-level base name used by the export
+    filter (e.g. QPM1); empty means derive it from `source_var`.
     """
 
     source_var: str
     store_col: str
     kind: str = "text"
+    pull_term: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ColumnBinding":
@@ -80,14 +93,18 @@ class ColumnBinding:
             source_var=str(d["source_var"]),
             store_col=str(d["store_col"]),
             kind=str(d.get("kind", "text")),
+            pull_term=str(d.get("pull_term", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "source_var": self.source_var,
             "store_col": self.store_col,
             "kind": self.kind,
         }
+        if self.pull_term:
+            out["pull_term"] = self.pull_term
+        return out
 
 
 @dataclass
