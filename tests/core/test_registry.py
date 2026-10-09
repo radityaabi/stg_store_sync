@@ -244,3 +244,46 @@ def test_corrupt_schedule_row_degrades_to_manual(tmp_path):
     assert entries[0].schedule.every == "five"  # passed through unvalidated
     assert human(entries[0].schedule) == "manual only"  # renderable
     r.close()
+
+
+def test_roundtrips_pairing_fields(tmp_path):
+    r = Registry(tmp_path / "reg.db")
+    job = JobConfig(
+        "link1", StoreConfig(17620, "No"),
+        SourceConfig("SURV", survey_index={"T_QPM1_1": "QPM1"}, paired_survey_id="SURV"),
+        BindingConfig(ColumnBinding("SbjNum", "SbjNum"),
+            [ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1")]),
+        WriteConfig(dry_run=True),
+    )
+    r.add(job)
+    got = r.get("link1")
+    assert got.source.survey_index == {"T_QPM1_1": "QPM1"}
+    assert got.source.paired_survey_id == "SURV"
+    assert got.binding.columns[0].pull_term == "QPM1"
+    r.close()
+
+
+def test_legacy_row_reads_back_unpaired(tmp_path):
+    import sqlite3
+    db = tmp_path / "reg.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,"
+        " store_id INTEGER, id_column TEXT, survey_id TEXT, match_source_var TEXT,"
+        " match_store_col TEXT, dry_run INTEGER DEFAULT 1, enabled INTEGER DEFAULT 0);"
+        "CREATE TABLE job_columns (job_id INTEGER, store_col TEXT, source_var TEXT,"
+        " kind TEXT DEFAULT 'text', ord INTEGER, PRIMARY KEY (job_id, ord));"
+    )
+    con.execute("INSERT INTO jobs (name, store_id, id_column, survey_id,"
+                " match_source_var, match_store_col) VALUES ('old', 1, 'No', 'S', 'SbjNum', 'SbjNum')")
+    con.execute("INSERT INTO job_columns (job_id, store_col, source_var, ord)"
+                " VALUES (1, 'I7_1_2', 'T_QPM1_1', 0)")
+    con.commit(); con.close()
+    r = Registry(db)
+    got = r.get("old")
+    assert got.source.survey_index == {}
+    assert got.source.paired_survey_id == ""
+    assert got.binding.columns[0].pull_term == ""
+    cols = {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
+    assert {"survey_index", "paired_survey_id"} <= cols
+    r.close()

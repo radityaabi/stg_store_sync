@@ -12,6 +12,7 @@ stores a subset of ``JobConfig`` (no ``binding.mode``, ``write.op`` or
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,12 @@ _SCHEDULE_COLUMNS = (
     ("schedule_weekday", "INTEGER NOT NULL DEFAULT 0"),
 )
 
+_PAIRING_COLUMNS = (
+    # (column, DDL) — the survey-pairing fields (spec §4.6).
+    ("survey_index", "TEXT NOT NULL DEFAULT '{}'"),
+    ("paired_survey_id", "TEXT NOT NULL DEFAULT ''"),
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +56,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     schedule_every   INTEGER NOT NULL DEFAULT 1,
     schedule_at      TEXT NOT NULL DEFAULT '',
     schedule_weekday INTEGER NOT NULL DEFAULT 0,
+    survey_index     TEXT NOT NULL DEFAULT '{}',
+    paired_survey_id TEXT NOT NULL DEFAULT '',
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -57,6 +66,7 @@ CREATE TABLE IF NOT EXISTS job_columns (
     store_col  TEXT NOT NULL,
     source_var TEXT NOT NULL,
     kind       TEXT NOT NULL DEFAULT 'text',
+    pull_term  TEXT NOT NULL DEFAULT '',
     ord        INTEGER NOT NULL,
     PRIMARY KEY (job_id, ord)
 );
@@ -109,6 +119,7 @@ class Registry:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
         self._add_schedule_columns()
+        self._add_pairing_columns()
         self._drop_legacy_columns(("window_days", "date_type", "schedule", "delete_policy"))
         self.conn.commit()
 
@@ -126,6 +137,28 @@ class Registry:
         for col, ddl in _SCHEDULE_COLUMNS:
             if col not in present:
                 self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+
+    def _add_pairing_columns(self) -> None:
+        """Add the survey-pairing columns when an older DB lacks them.
+
+        An existing row reads back unpaired (`survey_index='{}'`,
+        `paired_survey_id=''`); `pull_term` on `job_columns` defaults to ''.
+        """
+        present = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(jobs)")
+        }
+        for col, ddl in _PAIRING_COLUMNS:
+            if col not in present:
+                self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+        present = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(job_columns)")
+        }
+        if "pull_term" not in present:
+            self.conn.execute(
+                "ALTER TABLE job_columns ADD COLUMN pull_term TEXT NOT NULL DEFAULT ''"
+            )
 
     def _drop_legacy_columns(self, columns: tuple[str, ...]) -> None:
         """Drop legacy `jobs` columns when present (SQLite ≥ 3.35)."""
@@ -153,16 +186,19 @@ class Registry:
             str(match.source_var) if match else "",
             str(match.store_col) if match else "",
             int(bool(job.write.dry_run)),
+            json.dumps(job.source.survey_index),
+            str(job.source.paired_survey_id),
         )
 
     def _replace_columns(self, job_id: int, job: JobConfig) -> None:
         self.conn.execute("DELETE FROM job_columns WHERE job_id = ?", (job_id,))
         for ord_, col in enumerate(job.binding.columns):
             self.conn.execute(
-                "INSERT INTO job_columns (job_id, store_col, source_var, kind, ord) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO job_columns "
+                "(job_id, store_col, source_var, kind, pull_term, ord) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (job_id, str(col.store_col), str(col.source_var),
-                 str(col.kind), ord_),
+                 str(col.kind), str(col.pull_term), ord_),
             )
 
     def _job_id(self, name: str) -> int:
@@ -241,9 +277,9 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "dry_run, enabled, "
+                    "dry_run, survey_index, paired_survey_id, enabled, "
                     "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, int(bool(enabled)),
                      *self._schedule_values(schedule)),
                 )
@@ -266,7 +302,8 @@ class Registry:
         sets = [
             "store_id = ?", "id_column = ?", "survey_id = ?",
             "match_source_var = ?", "match_store_col = ?",
-            "dry_run = ?", "name = ?",
+            "dry_run = ?", "survey_index = ?", "paired_survey_id = ?",
+            "name = ?",
         ]
         # values order matches `sets`; job name for the WHERE is the last value.
         params = list(self._config_values(job)[1:])  # drop the old name slot
@@ -302,18 +339,23 @@ class Registry:
         if row is None:
             raise KeyError(f"no such job: {name!r}")
         cols = self.conn.execute(
-            "SELECT store_col, source_var, kind FROM job_columns "
+            "SELECT store_col, source_var, kind, pull_term FROM job_columns "
             "WHERE job_id = ? ORDER BY ord",
             (row["id"],),
         ).fetchall()
         return JobConfig(
             job=row["name"],
             store=StoreConfig(row["store_id"], row["id_column"]),
-            source=SourceConfig(row["survey_id"]),
+            source=SourceConfig(
+                row["survey_id"],
+                survey_index=json.loads(row["survey_index"] or "{}"),
+                paired_survey_id=row["paired_survey_id"],
+            ),
             binding=BindingConfig(
                 match=ColumnBinding(row["match_source_var"], row["match_store_col"]),
                 columns=[
-                    ColumnBinding(c["source_var"], c["store_col"], c["kind"])
+                    ColumnBinding(c["source_var"], c["store_col"], c["kind"],
+                                  c["pull_term"])
                     for c in cols
                 ],
             ),
