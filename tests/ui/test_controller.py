@@ -1048,3 +1048,60 @@ def test_job_from_detail_has_no_delete_policy(tmp_path):
     assert not hasattr(job.write, "delete_policy")
     c.stop()
     w.close()
+
+
+# -- pairing: fetch the survey XML once, fill pull terms (spec) -------------
+
+def test_pair_survey_fills_terms_off_thread(tmp_path, monkeypatch):
+    import store_sync.gui as gui
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+
+    class Client:
+        session = types.SimpleNamespace(close=lambda: None)
+        def get_survey_xml(self, survey_id):
+            return ("<Survey><SQ><QuestionID>762</QuestionID>"
+                    "<VariableName>QPM1</VariableName></SQ>"
+                    "<STo><QuestionID>762</QuestionID>"
+                    "<VariableName>T_QPM1_1</VariableName></STo></Survey>")
+
+    monkeypatch.setattr(c, "_client", lambda: Client())
+    c._pair_survey()
+    _drain(c, "_pair_thread")
+    assert w.job_detail.binding_model.columns()[0].pull_term == "QPM1"
+    assert w.job_detail.config_fields()["paired_survey_id"] == "SURV"
+    c.stop(); w.close()
+
+
+def test_pair_survey_reports_unresolved(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())  # column var T_QPM1_1
+
+    class Client:
+        session = types.SimpleNamespace(close=lambda: None)
+        def get_survey_xml(self, survey_id):
+            return "<Survey/>"  # nothing resolves
+
+    monkeypatch.setattr(c, "_client", lambda: Client())
+    c._pair_survey()
+    _drain(c, "_pair_thread")
+    assert "unresolved" in w.status_label.text().lower()
+    assert w.job_detail.binding_model.columns()[0].pull_term == ""
+    c.stop(); w.close()
+
+
+def test_job_from_detail_carries_pairing(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.set_pairing("SURV", {"T_QPM1_1": "QPM1"}, {"T_QPM1_1": "QPM1"})
+    job = c._job_from_detail()
+    assert job.source.paired_survey_id == "SURV"
+    assert job.source.survey_index == {"T_QPM1_1": "QPM1"}
+    assert job.binding.columns[0].pull_term == "QPM1"
+    c.stop(); w.close()

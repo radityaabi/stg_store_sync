@@ -213,6 +213,7 @@ class Controller:
         # container that guarantees a running QThread is never GC'd mid-run. Each
         # worker is discarded on its `finished` signal; all are joined in `stop()`.
         self._preflight_thread: QThread | None = None
+        self._pair_thread: QThread | None = None
         self._mapping_thread: QThread | None = None
         self._apply_thread: QThread | None = None
         self._workers: set[QThread] = set()
@@ -293,6 +294,7 @@ class Controller:
             self._scheduler_thread.wait(3000)
             self._scheduler_thread = None
         self._join_worker("_preflight_thread")
+        self._join_worker("_pair_thread")
         self._join_worker("_mapping_thread")
         self._join_worker("_apply_thread")
         self.queue.shutdown()
@@ -320,6 +322,7 @@ class Controller:
             worker.wait()
         self._workers.clear()
         self._preflight_thread = None
+        self._pair_thread = None
         self._mapping_thread = None
         self._apply_thread = None
 
@@ -465,6 +468,7 @@ class Controller:
         w.delete_requested.connect(self._confirm_delete)
         w.save_requested.connect(self._save_from_detail)
         w.preflight_requested.connect(self._preflight)
+        w.pair_requested.connect(self._pair_survey)
         w.approve_requested.connect(self._approve)
         w.import_requested.connect(self._import_mapping)
         w.export_requested.connect(self._export_mapping)
@@ -688,7 +692,11 @@ class Controller:
         return JobConfig(
             job=self._detail_name or "",
             store=StoreConfig(fields["store_id"], fields["id_column"]),
-            source=SourceConfig(fields["survey_id"]),
+            source=SourceConfig(
+                fields["survey_id"],
+                survey_index=fields.get("survey_index", {}),
+                paired_survey_id=fields.get("paired_survey_id", ""),
+            ),
             binding=BindingConfig(
                 match=ColumnBinding(match_source, match_store),
                 columns=self.window.job_detail.bindings(),
@@ -910,6 +918,69 @@ class Controller:
         msg = _short(exc)
         self.window.set_status(f"preflight error: {msg}", _STATUS_FAIL)
         self.window.toast(f"Preflight error: {msg}", kind="fail")
+
+    # -- survey pairing ----------------------------------------------------
+
+    def _pair_survey(self) -> None:
+        """Fetch the survey XML once, resolve each column's question base name.
+
+        Runs off the GUI thread (the XML is a large download); on success the
+        grid's `pull_term` column is filled and the index is stored for save.
+        """
+        from store_sync.core.fetcher import pair_columns, parse_survey_index
+
+        w = self.window
+        try:
+            job = self._job_from_detail()
+        except ValueError:
+            logger.exception("controller: invalid config for pairing")
+            w.set_status("config error", _STATUS_FAIL)
+            return
+        try:
+            client = self._client()
+        except Exception:  # noqa: BLE001 - surface any failure to operator
+            logger.exception("controller: pairing client failed")
+            w.set_status("pairing error", _STATUS_FAIL)
+            w.toast("Pairing error: could not build STG client (check .env)",
+                    kind="fail")
+            return
+        survey_id = job.source.survey_id
+        w.set_status("pairing...", _STATUS_WARN)
+
+        def work():
+            # The worker performs the network fetch and closes its session.
+            try:
+                index = parse_survey_index(client.get_survey_xml(survey_id))
+                terms, unresolved = pair_columns(
+                    [c.source_var for c in job.binding.columns], index
+                )
+                return survey_id, index, terms, unresolved
+            finally:
+                self._close_client(client)
+
+        worker = _NetworkWorker(work)
+        worker.ok.connect(self._on_pair_ok)
+        worker.failed.connect(self._on_pair_error)
+        self._start_worker("_pair_thread", worker, label="pairing")
+
+    def _on_pair_ok(self, result) -> None:
+        survey_id, index, terms, unresolved = result
+        self.window.job_detail.set_pairing(survey_id, index, terms)
+        if unresolved:
+            self.window.set_status(
+                f"paired — {len(unresolved)} unresolved", _STATUS_WARN
+            )
+            self.window.toast(
+                f"Paired, but unresolved: {', '.join(unresolved)}", kind="warn"
+            )
+        else:
+            self.window.set_status("paired", _STATUS_OK)
+            self.window.toast("Survey paired — save to persist", kind="ok")
+
+    def _on_pair_error(self, exc) -> None:
+        msg = _short(exc)
+        self.window.set_status(f"pairing error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Pairing error: {msg}", kind="fail")
 
     # -- mapping import / export -------------------------------------------
 
