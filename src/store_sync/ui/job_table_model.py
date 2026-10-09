@@ -24,6 +24,9 @@ class JobTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._columns: list[ColumnBinding] = []
+        # Maintained mirror of the last `set_pull_terms` mapping (kept for the
+        # reload-clears-stale-pull-terms invariant; column 2 renders
+        # `col.pull_term`).
         self._pull_terms: dict[str, str] = {}
         # kind: deliberately NOT surfaced in the UI (no API source of truth).
 
@@ -50,7 +53,7 @@ class JobTableModel(QAbstractTableModel):
             if c == 1:
                 return col.source_var
             if c == 2:
-                return self._pull_terms.get(col.source_var, "")
+                return col.pull_term
         if role == Qt.ForegroundRole and c == 2:
             return _MUTED  # derived/read-only
         return None
@@ -80,10 +83,13 @@ class JobTableModel(QAbstractTableModel):
     def set_columns(self, columns: list[ColumnBinding]) -> None:
         self.beginResetModel()
         self._columns = list(columns)
+        self._pull_terms = {}
         self.endResetModel()
 
     def set_pull_terms(self, mapping: dict[str, str]) -> None:
         self._pull_terms = dict(mapping)
+        for col in self._columns:
+            col.pull_term = mapping.get(col.source_var, "")
         if self._columns:
             self.dataChanged.emit(
                 self.index(0, 2), self.index(len(self._columns) - 1, 2)

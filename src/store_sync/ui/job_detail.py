@@ -55,11 +55,14 @@ class JobDetail(QWidget):
     run_activated = Signal(int)
     apply_proposals_requested = Signal(list)
     dismiss_proposals_requested = Signal(list)
+    pair_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._history_ids: list[int] = []
         self._progress_lines: list[str] = []
+        self._survey_index: dict = {}
+        self._paired_survey_id: str = ""
         self._build_ui()
 
     # -- construction ------------------------------------------------------
@@ -168,9 +171,13 @@ class JobDetail(QWidget):
         self.import_button.clicked.connect(self.import_requested.emit)
         self.export_button = QPushButton("📤 Export mapping")
         self.export_button.clicked.connect(self.export_requested.emit)
+        self.pair_button = QPushButton("🔗 Pair with survey XML")
+        self.pair_button.setObjectName("btn_warning")
+        self.pair_button.clicked.connect(self.pair_requested.emit)
         bar.addWidget(self.add_column_button)
         bar.addWidget(self.remove_column_button)
         bar.addStretch(1)
+        bar.addWidget(self.pair_button)
         bar.addWidget(self.import_button)
         bar.addWidget(self.export_button)
         lay.addLayout(bar)
@@ -359,7 +366,8 @@ class JobDetail(QWidget):
         )
         self.dry_run_check.setChecked(bool(job.write.dry_run))
 
-        self.binding_model.set_pull_terms({})
+        self._survey_index = dict(job.source.survey_index)
+        self._paired_survey_id = job.source.paired_survey_id
         self.binding_model.set_columns(job.binding.columns)
 
         self.set_proposals([])
@@ -373,6 +381,12 @@ class JobDetail(QWidget):
 
     def set_pull_terms(self, mapping: dict[str, str]) -> None:
         self.binding_model.set_pull_terms(mapping)
+
+    def set_pairing(self, survey_id, index, terms) -> None:
+        """Store the paired survey's index + id, and fill the pull-term column."""
+        self._survey_index = dict(index)
+        self._paired_survey_id = survey_id
+        self.binding_model.set_pull_terms(terms)
 
     def set_history(self, rows: list[dict]) -> None:
         self.history_model.set_rows(rows)
@@ -428,6 +442,8 @@ class JobDetail(QWidget):
             "match_source_var": self.match_var_edit.text().strip(),
             "match_store_col": self.match_store_edit.text().strip(),
             "dry_run": self.dry_run_check.isChecked(),
+            "survey_index": dict(self._survey_index),
+            "paired_survey_id": self._paired_survey_id,
         }
 
     # -- slots -------------------------------------------------------------

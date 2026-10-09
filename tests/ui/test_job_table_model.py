@@ -25,3 +25,14 @@ def test_job_list_model_rows():
     m.set_entries([E()])
     assert m.rowCount() == 1
     assert m.entry_at(0).name == "a"
+
+def test_pull_term_renders_from_binding():
+    m = JobTableModel()
+    m.set_columns([ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1")])
+    assert m.data(m.index(0, 2), Qt.DisplayRole) == "QPM1"
+
+def test_set_pull_terms_fills_column_pull_term():
+    m = JobTableModel()
+    m.set_columns([ColumnBinding("T_QPM1_1", "I7_1_2")])
+    m.set_pull_terms({"T_QPM1_1": "QPM1"})
+    assert m.columns()[0].pull_term == "QPM1"

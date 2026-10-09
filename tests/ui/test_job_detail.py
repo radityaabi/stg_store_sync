@@ -1,6 +1,7 @@
 """Tests for the store-detail pane (offscreen Qt)."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from store_sync.core.config import (BindingConfig, ColumnBinding, JobConfig,
@@ -22,6 +23,25 @@ def b_job():
 class E:
     name="a"; store_id=17620; survey_id="SURV"; schedule=Schedule("")
     enabled=False; last_status=None; last_finished_at=None; column_count=1
+
+@pytest.fixture
+def detail():
+    d = JobDetail()
+    d.load(E(), a_job())
+    return d
+
+@pytest.fixture
+def entry():
+    return E()
+
+@pytest.fixture
+def job_with_pull_term():
+    return JobConfig("a", StoreConfig(17620, "No"),
+        SourceConfig("SURV", survey_index={"T_QPM1_1": "QPM1"},
+            paired_survey_id="SURV"),
+        BindingConfig(ColumnBinding("SbjNum", "SbjNum"),
+            [ColumnBinding("T_QPM1_1", "I7_1_2", pull_term="QPM1")]),
+        WriteConfig())
 
 def test_load_and_edit_binding():
     d = JobDetail()
@@ -75,7 +95,7 @@ def test_config_fields_round_trip():
     assert d.config_fields() == {
         "store_id": 17620, "id_column": "No", "survey_id": "SURV",
         "match_source_var": "SbjNum", "match_store_col": "SbjNum",
-        "dry_run": True,
+        "dry_run": True, "survey_index": {}, "paired_survey_id": "",
     }
 
 
@@ -323,3 +343,22 @@ def test_schedule_every_spin_range_follows_unit_and_clamps():
     d.schedule_unit_combo.setCurrentIndex(d.schedule_unit_combo.findData("week"))
     assert d.schedule_every_spin.maximum() == 52
     assert 1 <= d.schedule_every_spin.value() <= 52
+
+
+def test_pairing_button_emits_signal(detail):
+    seen = []
+    detail.pair_requested.connect(lambda: seen.append(1))
+    detail.pair_button.click()
+    assert seen == [1]
+
+
+def test_set_pairing_stores_index_and_terms(detail):
+    detail.set_pairing("SURV", {"T_QPM1_1": "QPM1"}, {"T_QPM1_1": "QPM1"})
+    assert detail.config_fields()["paired_survey_id"] == "SURV"
+    assert detail.config_fields()["survey_index"] == {"T_QPM1_1": "QPM1"}
+    assert detail.binding_model.columns()[0].pull_term == "QPM1"
+
+
+def test_load_does_not_wipe_stored_pull_term(detail, entry, job_with_pull_term):
+    detail.load(entry, job_with_pull_term)
+    assert detail.binding_model.columns()[0].pull_term == "QPM1"
