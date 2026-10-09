@@ -110,10 +110,57 @@ class TestParse:
         parsed, errors = parse_mapping(p, store_cols(), source_vars())
         assert any("duplicate" in e.lower() for e in errors)
 
-    def test_kind_column_optional(self, tmp_path):
+    def test_legacy_kind_column_ignored(self, tmp_path):
+        """A legacy 3-column file (store_col · source_var · kind) still imports.
+
+        The kind column was removed (no API source of truth); an old template
+        with it must not be rejected — the extra column is simply ignored.
+        """
         p = self._write(tmp_path, [["Q32", "Q32", "number"]])
-        parsed, _ = parse_mapping(p, store_cols(), source_vars())
-        assert parsed[0].kind == "number"
+        parsed, errors = parse_mapping(p, store_cols(), source_vars())
+        assert errors == []
+        assert parsed[0].source_var == "Q32"
+        assert parsed[0].store_col == "Q32"
+        assert parsed[0].kind == "text"  # kind no longer read from the file
+
+    def test_id_column_row_without_source_var_is_skipped(self, tmp_path):
+        """The id/tag column row legitimately has no source var — skip it.
+
+        The planner owns the id column (adds assign max(id)+1, updates keep
+        the value immutable), so a template row for it is skipped, not
+        rejected as incomplete.
+        """
+        p = self._write(tmp_path, [["No", None], ["Q32", "Q32"]])
+        parsed, errors = parse_mapping(
+            p, ["No", "Q32"], valid_source_vars=None, id_column="No"
+        )
+        assert errors == []
+        assert [c.store_col for c in parsed] == ["Q32"]
+
+    def test_other_incomplete_row_still_rejected_even_with_id_column(
+        self, tmp_path
+    ):
+        """Only the id column's row is skipped; other half-filled rows still error."""
+        p = self._write(tmp_path, [["No", None], ["Spare", ""]])
+        parsed, errors = parse_mapping(
+            p, ["No", "Spare"], valid_source_vars=None, id_column="No"
+        )
+        assert any("incomplete row" in e for e in errors)
+        assert parsed == []
+
+    def test_unknown_source_var_rejected_when_list_given(self, tmp_path):
+        """With a var list supplied (non-None), unknown vars are still rejected."""
+        p = self._write(tmp_path, [["Q32", "NOPE"]])
+        parsed, errors = parse_mapping(p, store_cols(), ["Q32", "OTHER"])
+        assert any("NOPE" in e for e in errors)
+        assert parsed == []
+
+    def test_unknown_source_var_accepted_when_list_deferred(self, tmp_path):
+        """Without a var list (None), validation is deferred to preflight."""
+        p = self._write(tmp_path, [["Q32", "NOPE"]])
+        parsed, errors = parse_mapping(p, store_cols(), None)
+        assert errors == []
+        assert parsed[0].source_var == "NOPE"
 
     def test_missing_headers_errors(self, tmp_path):
         p = tmp_path / "bad.xlsx"

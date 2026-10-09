@@ -56,6 +56,8 @@ class MainWindow(QMainWindow):
     back = Signal()
     schedules_requested = Signal()
     run_activated = Signal(int)
+    apply_proposals_requested = Signal(list)
+    dismiss_proposals_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -131,6 +133,12 @@ class MainWindow(QMainWindow):
         self.job_detail.import_requested.connect(self.import_requested.emit)
         self.job_detail.export_requested.connect(self.export_requested.emit)
         self.job_detail.run_activated.connect(self.run_activated.emit)
+        self.job_detail.apply_proposals_requested.connect(
+            self.apply_proposals_requested.emit
+        )
+        self.job_detail.dismiss_proposals_requested.connect(
+            self.dismiss_proposals_requested.emit
+        )
 
         # Run detail -> window proxies.
         self.run_detail.back.connect(self.back.emit)
@@ -155,6 +163,17 @@ class MainWindow(QMainWindow):
         # Runtime status color: the only sanctioned inline style — every other
         # cosmetic comes from the shared theme.STYLESHEET.
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def toast(self, text: str, *, kind: str = "ok") -> None:
+        """Show a floating, auto-dismissing notification (top-right).
+
+        `kind`: "ok" | "warn" | "fail". For **terminal** events only (save
+        ok/failed, import rejected, preflight blocked, …) — transient progress
+        ("importing...", "ready") belongs in `set_status`, not here.
+        """
+        from store_sync.ui.toast import show_toast
+
+        show_toast(self, text, kind=kind)
 
     # -- slots -------------------------------------------------------------
     def _on_detail_run(self) -> None:

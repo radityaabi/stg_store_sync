@@ -115,7 +115,7 @@ def a_job():
 def an_entry():
     return JobEntry(name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
-        delete_policy="full_history", dry_run=True,
+        dry_run=True,
         enabled=True, schedule=Schedule("day", 1, "03:00"), column_count=1,
         last_status=None, last_finished_at=None)
 
@@ -161,7 +161,7 @@ def test_job_dialog_defaults():
     dlg = JobDialog()
     assert not hasattr(dlg, "window_days_edit")
     assert not hasattr(dlg, "date_type_edit")
-    assert dlg.delete_policy_combo.currentData() == "full_history"
+    assert not hasattr(dlg, "delete_policy_combo")
     assert dlg.dry_run_check.isChecked() is True
     assert dlg.enabled is False
     assert dlg.binding_model.rowCount() == 0

@@ -7,7 +7,6 @@ documented, validated contract (see docs/superpowers/specs/.../design.md §7.1).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -34,14 +33,6 @@ _WEEKDAY_NAMES = (
     "Saturday",
     "Sunday",
 )
-
-
-class DeletePolicy(str, Enum):
-    """How rows absent from the pull are treated (spec §6)."""
-
-    FULL_HISTORY = "full_history"
-    TRACKED_ONLY = "tracked_only"
-    MANUAL = "manual"
 
 
 @dataclass
@@ -126,15 +117,15 @@ class BindingConfig:
 class WriteConfig:
     op: str = "full_sync"
     dry_run: bool = True
-    delete_policy: str = DeletePolicy.FULL_HISTORY.value
     normalize: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "WriteConfig":
+        # A legacy `delete_policy` key is deliberately ignored: the tool no
+        # longer deletes (spec §6), so the value carries no meaning.
         return cls(
             op=str(d.get("op", "full_sync")),
             dry_run=bool(d.get("dry_run", True)),
-            delete_policy=str(d.get("delete_policy", DeletePolicy.FULL_HISTORY.value)),
             normalize=dict(d.get("normalize", {})),
         )
 
@@ -142,7 +133,6 @@ class WriteConfig:
         out = {
             "op": self.op,
             "dry_run": self.dry_run,
-            "delete_policy": self.delete_policy,
         }
         if self.normalize:
             out["normalize"] = self.normalize
@@ -333,13 +323,6 @@ def validate(cfg: JobConfig) -> list[str]:
     if cfg.write.op not in VALID_OPS:
         errors.append(
             f"write.op must be one of {sorted(VALID_OPS)}, got {cfg.write.op!r}"
-        )
-
-    valid_policies = {p.value for p in DeletePolicy}
-    if cfg.write.delete_policy not in valid_policies:
-        errors.append(
-            f"write.delete_policy must be one of {sorted(valid_policies)}, "
-            f"got {cfg.write.delete_policy!r}"
         )
 
     return errors

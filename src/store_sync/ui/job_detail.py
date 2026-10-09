@@ -11,6 +11,7 @@ console-ish surfaces, colour-coded action-rail buttons.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTime, Signal
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableView,
     QTabWidget,
+    QTextEdit,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
@@ -31,18 +33,12 @@ from PySide6.QtWidgets import (
 
 from store_sync.core.config import ColumnBinding, Schedule, human
 from store_sync.ui.job_table_model import JobTableModel
-from store_sync.ui.models import _DictTableModel
+from store_sync.ui.models import _DictTableModel, _ProposalTableModel
 from store_sync.ui.dialogs import (
     SCHEDULE_UNIT_ITEMS,
     WEEKDAY_ITEMS,
     refresh_schedule_ui,
 )
-
-DELETE_POLICIES = [
-    ("Full history", "full_history"),
-    ("Tracked only", "tracked_only"),
-    ("Manual", "manual"),
-]
 
 
 class JobDetail(QWidget):
@@ -57,10 +53,13 @@ class JobDetail(QWidget):
     import_requested = Signal()
     export_requested = Signal()
     run_activated = Signal(int)
+    apply_proposals_requested = Signal(list)
+    dismiss_proposals_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._history_ids: list[int] = []
+        self._progress_lines: list[str] = []
         self._build_ui()
 
     # -- construction ------------------------------------------------------
@@ -80,8 +79,31 @@ class JobDetail(QWidget):
         self.tabs.addTab(self._schedule_tab(), "Schedule")
         self.tabs.addTab(self._history_tab(), "History")
         self.tabs.addTab(self._conflicts_tab(), "Conflicts")
+        self.tabs.addTab(self._proposals_tab(), "Proposed updates")
         root.addWidget(self.tabs, stretch=1)
+        root.addWidget(self._run_progress_panel())
         root.addWidget(self._action_rail())
+
+    def _run_progress_panel(self) -> QWidget:
+        """Live run timeline (console log + status line), hidden until a run."""
+        self.progress_panel = QFrame()
+        self.progress_panel.setObjectName("ConsolePanel")
+        lay = QVBoxLayout(self.progress_panel)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(6)
+
+        self.progress_label = QLabel("run: —")
+        self.progress_label.setObjectName("ProgressLabel")
+        lay.addWidget(self.progress_label)
+
+        self.progress_text = QTextEdit()
+        self.progress_text.setObjectName("ConsoleLog")
+        self.progress_text.setReadOnly(True)
+        self.progress_text.setFixedHeight(160)
+        lay.addWidget(self.progress_text)
+
+        self.progress_panel.hide()
+        return self.progress_panel
 
     def _config_tab(self) -> QWidget:
         w = QWidget()
@@ -111,11 +133,6 @@ class JobDetail(QWidget):
         lay.addLayout(row2)
 
         row4 = QHBoxLayout()
-        row4.addWidget(QLabel("Delete policy:"))
-        self.delete_policy_combo = QComboBox()
-        for label, value in DELETE_POLICIES:
-            self.delete_policy_combo.addItem(label, value)
-        row4.addWidget(self.delete_policy_combo)
         self.dry_run_check = QCheckBox("Dry run")
         self.dry_run_check.setChecked(True)
         row4.addWidget(self.dry_run_check)
@@ -227,6 +244,74 @@ class JobDetail(QWidget):
         lay.addWidget(self.conflicts_view)
         return w
 
+    def _proposals_tab(self) -> QWidget:
+        """Pending update proposals the operator reviews + applies (spec §6)."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+
+        self.proposals_model = _ProposalTableModel(self)
+        self.proposals_view = QTableView()
+        self.proposals_view.setObjectName("ProposalsTable")
+        self.proposals_view.setModel(self.proposals_model)
+        self.proposals_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.proposals_view.setEditTriggers(
+            QAbstractItemView.AllEditTriggers
+        )
+        self.proposals_view.verticalHeader().setVisible(False)
+        self.proposals_view.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents
+        )
+        self.proposals_view.horizontalHeader().setStretchLastSection(True)
+        lay.addWidget(self.proposals_view, stretch=1)
+
+        self.proposals_empty_label = QLabel(
+            "No pending updates — the store matches the source."
+        )
+        self.proposals_empty_label.setObjectName("ProposalsEmpty")
+        lay.addWidget(self.proposals_empty_label)
+
+        bar = QHBoxLayout()
+        self.select_all_button = QPushButton("Select all")
+        self.select_all_button.clicked.connect(
+            lambda: self.proposals_model.set_all_checked(True)
+        )
+        self.select_none_button = QPushButton("Select none")
+        self.select_none_button.clicked.connect(
+            lambda: self.proposals_model.set_all_checked(False)
+        )
+        self.apply_button = QPushButton("✔ Apply selected")
+        self.apply_button.setObjectName("btn_success")
+        self.apply_button.clicked.connect(self._on_apply_proposals)
+        self.dismiss_button = QPushButton("Dismiss selected")
+        self.dismiss_button.setObjectName("btn_danger")
+        self.dismiss_button.clicked.connect(self._on_dismiss_proposals)
+        bar.addWidget(self.select_all_button)
+        bar.addWidget(self.select_none_button)
+        bar.addStretch(1)
+        bar.addWidget(self.apply_button)
+        bar.addWidget(self.dismiss_button)
+        lay.addLayout(bar)
+
+        self._update_proposals_empty_state()
+        return w
+
+    def _update_proposals_empty_state(self) -> None:
+        empty = self.proposals_model.rowCount() == 0
+        self.proposals_empty_label.setVisible(empty)
+        self.proposals_view.setVisible(not empty)
+
+    def _on_apply_proposals(self) -> None:
+        ids = self.proposals_model.checked_ids()
+        if ids:
+            self.apply_proposals_requested.emit(ids)
+
+    def _on_dismiss_proposals(self) -> None:
+        ids = self.proposals_model.checked_ids()
+        if ids:
+            self.dismiss_proposals_requested.emit(ids)
+
     def _action_rail(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("ActionRail")
@@ -272,13 +357,12 @@ class JobDetail(QWidget):
         self.match_store_edit.setText(
             (match.store_col if match else "") or (match.source_var if match else "")
         )
-        idx = self.delete_policy_combo.findData(job.write.delete_policy)
-        if idx >= 0:
-            self.delete_policy_combo.setCurrentIndex(idx)
         self.dry_run_check.setChecked(bool(job.write.dry_run))
 
         self.binding_model.set_pull_terms({})
         self.binding_model.set_columns(job.binding.columns)
+
+        self.set_proposals([])
 
         self.enabled_check.setChecked(bool(getattr(entry, "enabled", False)))
         self._set_schedule(getattr(entry, "schedule", None) or Schedule())
@@ -300,6 +384,38 @@ class JobDetail(QWidget):
     def set_conflicts(self, rows: list[dict]) -> None:
         self.conflicts_model.set_rows(rows)
 
+    def set_proposals(self, rows: list[dict]) -> None:
+        """Fill the Proposed-updates tab with pending proposals."""
+        self.proposals_model.set_rows(rows)
+        self._update_proposals_empty_state()
+
+    # -- live run timeline -------------------------------------------------
+    def set_run_progress(self, event: dict) -> None:
+        """Append one pipeline stage to the run console (see `sync.run_sync`).
+
+        `event` is `{"stage": ..., ...}`. The first event shows the panel;
+        `stage == "done"` leaves it up so the operator can read the outcome.
+        """
+        stage = event.get("stage", "")
+        if stage == "start":
+            self._progress_lines = []
+            self.progress_text.setPlainText("")
+            job = event.get("job", "")
+            dry = " (dry run)" if event.get("dry_run") else ""
+            self.progress_label.setText(f"run: {job}{dry}")
+        line = _progress_line(event)
+        if line:
+            self._progress_lines.append(line)
+            self.progress_text.setPlainText("\n".join(self._progress_lines))
+            # Keep the newest stage visible (setPlainText resets the cursor).
+            self.progress_text.moveCursor(QTextCursor.End)
+        self.progress_panel.show()
+
+    def clear_run_progress(self) -> None:
+        self._progress_lines = []
+        self.progress_text.setPlainText("")
+        self.progress_panel.hide()
+
     def approve(self) -> None:
         self.enabled_check.setChecked(True)
         self.approve_requested.emit()
@@ -311,7 +427,6 @@ class JobDetail(QWidget):
             "survey_id": self.survey_id_edit.text().strip(),
             "match_source_var": self.match_var_edit.text().strip(),
             "match_store_col": self.match_store_edit.text().strip(),
-            "delete_policy": self.delete_policy_combo.currentData(),
             "dry_run": self.dry_run_check.isChecked(),
         }
 
@@ -363,6 +478,58 @@ class JobDetail(QWidget):
             run_id = self._history_ids[row]
             if run_id is not None:
                 self.run_activated.emit(int(run_id))
+
+
+_STAGE_TEXT = {
+    "survey": "reading survey definition…",
+    "ids": "listing interviews",
+    "pull": "pulling interview data",
+    "store": "reading store",
+    "preflight": "checking readiness",
+    "plan": "planning changes",
+    "apply": "applying changes",
+    "applied": "changes applied",
+    "done": "finished",
+}
+
+
+def _progress_line(event: dict) -> str:
+    """One human-readable timeline line for a `run_sync` progress event."""
+    stage = event.get("stage", "")
+    label = _STAGE_TEXT.get(stage, stage)
+    if stage == "ids":
+        return f"· {label}: {event.get('total', 0)} interview(s)"
+    if stage == "pull":
+        return f"· {label}: {event.get('total', 0)} record(s)"
+    if stage == "store":
+        return f"· {label}: {event.get('total', 0)} row(s)"
+    if stage == "plan":
+        return f"· {label}: {_fmt_counts(event.get('counts')) or 'no changes'}"
+    if stage == "apply":
+        dry = " (dry run)" if event.get("dry_run") else ""
+        return f"· {label}: {event.get('planned', 0)} action(s){dry}"
+    if stage == "applied":
+        dry = " (dry run)" if event.get("dry_run") else ""
+        return f"· {label}: {_fmt_counts(event.get('counts')) or 'nothing'}{dry}"
+    if stage == "done":
+        counts = _fmt_counts(event.get("counts"))
+        dry = " (dry run)" if event.get("dry_run") else ""
+        tail = f" ({counts})" if counts else ""
+        return f"· {label}: {event.get('status', '?')}{dry}{tail}"
+    if stage == "start":
+        return "· started"
+    if stage == "preflight":
+        errs = event.get("errors") or []
+        if errs:
+            return f"· {label}: {len(errs)} problem(s)"
+        return f"· {label}: ok"
+    return f"· {label}"
+
+
+def _fmt_counts(counts) -> str:
+    if not counts:
+        return ""
+    return ", ".join(f"{k} {v}" for k, v in counts.items())
 
 
 def _dict_view(model: _DictTableModel) -> QTableView:

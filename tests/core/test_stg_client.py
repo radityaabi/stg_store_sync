@@ -277,28 +277,10 @@ class TestWriteRows:
         assert _path(url) == "/api/SubjectStores/UpdateRow/17417"
         assert params == {"uniqueID": "1001", "I7_1_2": "X"}
 
-    def test_delete_row_uses_path_segment(self, client_and_session):
-        c, s = client_and_session
-        s._responses = [FakeResponse(200, {"Done": True})]
-        assert c.delete_row(17620, 3) == {"Done": True}
-        method, url, params, *_ = s.calls[0]
-        assert method == "POST"
-        assert _path(url) == "/api/SubjectStores/DeleteRow/17620/3"
-        assert params in (None, {})
-
-    def test_delete_row_encodes_tag(self, client_and_session):
-        c, s = client_and_session
-        s._responses = [FakeResponse(200, {"Done": True})]
-        c.delete_row(1, "a/b c")
-        _, url, *_ = s.calls[0]
-        assert "a%2Fb%20c" in url or "a/b%20c" in url
-
-    def test_delete_all_rows(self, client_and_session):
-        c, s = client_and_session
-        s._responses = [FakeResponse(200, {"Done": True})]
-        c.delete_all_rows(17620)
-        _, url, *_ = s.calls[0]
-        assert _path(url) == "/api/SubjectStores/DeleteAllRows/17620"
+    def test_no_delete_surface(self, client_and_session):
+        c, _ = client_and_session
+        assert not hasattr(c, "delete_row")
+        assert not hasattr(c, "delete_all_rows")
 
 
 class TestErrors:

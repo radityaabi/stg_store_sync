@@ -20,8 +20,8 @@ We want a standalone tool that:
 1. **Pulls** interview data for a source survey (all interviews).
 2. **Selects** a configured set of columns.
 3. **Writes** the resulting rows into a target STG Subject Store — adding new
-   rows, updating changed rows, and (by policy) deleting rows absent from the
-   source.
+   rows automatically and proposing changed rows for operator approval. It never
+   deletes.
 4. Runs on demand via a desktop **GUI + Sync button**, with an optional
    headless/scheduled path.
 
@@ -132,11 +132,12 @@ column is `uniqueID`). `AddRow` without the id value produces tag `0` (probe F5)
 which is then unreachable by tag. So the job must **declare** the id column and
 preflight must **verify** it.
 
-### 2.6 Pull-window trap (affects delete)
+### 2.6 Pull-window trap (why there is no delete)
 
 A 60-day `Upload` window returned 296 subjects; **22 store rows had no matching
 subject** (their interviews predate the window). Therefore "absent from the pull"
-≠ "should be deleted". A delete policy must account for this.
+≠ "should be deleted" — which is why the tool never deletes: absent rows are left
+untouched.
 
 ### 2.7 Key-candidate sanity check
 
@@ -193,7 +194,7 @@ preflight, never a required input. The filter is never a correctness dependency.
 **Goals**
 - Pull all interviews for one source survey; select configured columns.
 - Reconcile against the target store by an **explicit identity key**.
-- Add new rows, update changed rows, delete by policy.
+- Add new rows automatically; propose changed rows for operator approval. No delete.
 - Fail closed on ambiguity (never guess).
 - GUI with a **Sync** button; dry-run by default.
 - Standalone repo, own deps, own secrets.
@@ -255,9 +256,9 @@ GET GetStore/{store_id}     → store rows
 index store by SbjNum       → store_by_key
 
 new      = source.keys ∖ store.keys                      → ADD    (tag = next_tag(store))
-changed  = keys ∩ , values differ                        → UPDATE (tag preserved)
+changed  = keys ∩ , values differ                        → UPDATE (proposal; tag preserved)
 same     = keys ∩ , values equal                         → SKIP
-absent   = store.keys ∖ source.keys                      → DELETE (per policy §6)
+absent   = store.keys ∖ source.keys                      → untouched (no delete)
 ```
 
 New rows are discovered **by key set difference**, never by position/timestamp.
@@ -268,8 +269,8 @@ New rows are discovered **by key set difference**, never by position/timestamp.
 - **ADD** → `AddRow` with **all** columns incl. the assigned tag value.
 - **UPDATE** → `UpdateRow` with **all** columns; the id value must already exist
   and is sent unchanged. Because the API upserts on the id column, an update can
-  never accidentally insert (the id value is present).
-- **DELETE** → `DeleteRow/{storeID}/{tag_value}`; then re-read to confirm.
+  never accidentally insert (the id value is present). An update is written
+  **only** when the operator applies a proposal (compare-and-swap).
 - A **new column** (e.g. `SbjNum`) must be **pre-defined in STG Studio** — the API
   rejects unknown columns.
 
@@ -360,21 +361,36 @@ column; it never silently turns `""` into "skip".
 
 ---
 
-## 6. Write Model & Delete Policy
+## 6. Write Model
 
-**Full sync** = add + update + delete. `delete_policy` default =
-**`full_history`**:
+> **Superseded 2026-10-09** by
+> `docs/superpowers/plans/2026-10-09-manual-update-approval.md`. The write model
+> is now **AddRow only, automated**. Update is a **proposal** the operator
+> reviews and applies (compare-and-swap); **delete is removed entirely**.
 
-- Because the GUI can pull an arbitrary window, `full_history` requires the pull
-  to cover the full population (the operator configures the window accordingly).
-- Rows absent from a full-history source are deleted.
-- Other selectable policies: `tracked_only` (only rows this system wrote, tracked
-  in state), `manual` (report candidates, operator ticks).
-- `dry_run: true` is the **default**; no write happens until the operator
-  confirms.
+**Automation = add only.** New rows (match key in source, absent from store) are
+written by the run. A changed row is **not** written automatically:
 
-Write execution: **one request per row** (`AddRow`/`UpdateRow`/`DeleteRow`),
-throttled, with retry.
+- **Add** — automated. Written as `AddRow` with the full payload incl. the
+  assigned id/tag value.
+- **Update** — **proposed, never auto-applied**. A proposal is created only when
+  at least one mapped column differs **byte-for-byte** (`str()` comparison); an
+  identical row produces no proposal. The operator ticks the proposals to apply;
+  application is **compare-and-swap** — the store is re-read and every diffed
+  column must still equal its recorded `old` value, else the proposal is `stale`
+  and skipped. The written payload is the current store row overlaid with the new
+  values, so unrelated manual edits survive.
+- **Delete** — **removed**. The tool never calls `DeleteRow`, exposes no delete
+  option, and has no delete policy. Store rows absent from a pull are left
+  untouched (a short/failed pull must never imply deletion).
+
+Pending proposals are persisted in the state DB (`proposals` table) so headless/
+scheduled runs surface the same review queue in the GUI. `dry_run: true` is the
+**default**; no write happens until the operator confirms (a dry run records no
+applied state and no proposals).
+
+Write execution: **one request per row** (`AddRow`; `UpdateRow` only on an
+approved proposal), throttled, with retry.
 
 Probe-corrected write rules (Fase 0):
 
@@ -387,8 +403,6 @@ Probe-corrected write rules (Fase 0):
   update.
 - `UpdateRow` is an **upsert**; sending a full payload with an existing id value
   is a safe idempotent no-op.
-- `AddRow`/`UpdateRow` return success but `DeleteRow` **always** returns
-  `{Done: true}`; after any delete, **re-read the store** to confirm.
 - `AddRow` cannot introduce columns; the match column must pre-exist (§4.5).
 
 ---
@@ -410,11 +424,11 @@ stg-store-sync/
 │   ├── cli.py                     # headless entry (optional/scheduled)
 │   ├── core/
 │   │   ├── config.py              # job schema + validation + persistence
-│   │   ├── stg_client.py          # REST: stores / export / Add|Update|DeleteRow
+│   │   ├── stg_client.py          # REST: stores / export / Add|UpdateRow
 │   │   ├── fetcher.py             # pull → flatten EAV
 │   │   ├── binding.py             # parity + auto-suggest + preflight key test
-│   │   ├── planner.py             # diff → add/update/delete/conflicts
-│   │   ├── writer.py              # apply + throttle + retry + idempotency
+│   │   ├── planner.py             # diff → add / update (proposal) / conflicts
+│   │   ├── writer.py              # apply adds + CAS update proposals
 │   │   └── state.py               # SQLite: jobs, run log, conflicts, hashes
 │   └── ui/
 │       └── main_window.py
@@ -440,9 +454,8 @@ binding:
   # pull term (question-level base name) is DERIVED (shown read-only in preflight);
   # not a user input. If it cannot be resolved → full export + local projection.
 write:
-  op: full_sync                    # add + update + delete
+  op: full_sync                    # add automated; update proposed; no delete
   dry_run: true
-  delete_policy: full_history      # full_history | tracked_only | manual
   normalize: {}                    # per-column opt-in, default none
 ```
 
@@ -459,9 +472,10 @@ write:
     └─ PROJECT to the configured columns (source of truth)
   binding.apply()                → {id_column, match, columns}
   planner.diff(store_rows, records)
-    └─ add / update / delete / conflicts
-  writer.apply()                 → POST SubjectStores/{AddRow|UpdateRow}/... (+DeleteRow/{tag})
-  state.record_run()             → log + hashes
+    └─ add / update (proposal) / same / conflicts
+  writer.apply()                 → POST SubjectStores/AddRow/...   (adds only)
+  writer.apply_updates()         → POST SubjectStores/UpdateRow/... (approved proposals, CAS)
+  state.record_run()             → log + hashes + pending proposals
 ```
 
 ### 7.3 GUI (PySide6)
@@ -483,7 +497,10 @@ write:
   id-column check, match-key uniqueness, value-overlap suggestions).
 - **Sync** button; Dry-run toggle (default on).
 - Run log + conflicts panel.
-- Delete-policy selector.
+- **Proposed updates** panel — pending update proposals (match, id, `col: old →
+  new` diffs) with a tick-box column and **Apply selected** / **Dismiss
+  selected**. Applying is compare-and-swap; a stale proposal is skipped and
+  reported. There is **no delete** anywhere in the UI.
 
 ---
 

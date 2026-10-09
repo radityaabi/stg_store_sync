@@ -70,8 +70,7 @@ def test_get_roundtrips_stored_fields(reg):
             ColumnBinding("SbjNum", "SbjNum"),
             [ColumnBinding("T_QPM1_1", "I7_1_2", "number")],
         ),
-        WriteConfig(op="full_sync", dry_run=False,
-                    delete_policy="tracked_only", normalize={"x": "trim"}),
+        WriteConfig(op="full_sync", dry_run=False, normalize={"x": "trim"}),
     )
     reg.add(job, schedule=Schedule(""), enabled=False)
     got = reg.get("link2")
@@ -80,7 +79,6 @@ def test_get_roundtrips_stored_fields(reg):
     assert got.binding.match == ColumnBinding("SbjNum", "SbjNum")
     assert got.binding.columns == [ColumnBinding("T_QPM1_1", "I7_1_2", "number")]
     assert got.write.dry_run is False
-    assert got.write.delete_policy == "tracked_only"
     # Not in the §4 schema → reconstructed from JobConfig defaults.
     assert got.binding.mode == "mapped"
     assert got.write.op == "full_sync"
@@ -98,7 +96,6 @@ def test_add_defaults(reg):
     assert e.enabled is False
     assert e.schedule == Schedule("")
     assert e.dry_run is True
-    assert e.delete_policy == "full_history"
     assert e.column_count == 1
     assert e.last_status is None and e.last_finished_at is None
 
@@ -207,6 +204,7 @@ def test_migration_drops_window_columns(tmp_path):
     r = Registry(db)
     cols = {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
     assert "window_days" not in cols and "date_type" not in cols
+    assert "delete_policy" not in cols
     r.close()
 
 

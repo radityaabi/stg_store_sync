@@ -31,7 +31,6 @@ def config(
     *,
     dry_run=True,
     id_column="No",
-    delete_policy="full_history",
     mode="mapped",
     columns=None,
 ):
@@ -49,7 +48,7 @@ def config(
                 ColumnBinding("Q32", "Q32"),
             ],
         ),
-        write=WriteConfig(dry_run=dry_run, delete_policy=delete_policy),
+        write=WriteConfig(dry_run=dry_run),
     )
 
 
@@ -81,11 +80,6 @@ class FakeClient:
 
     def update_row(self, store_id, values):
         self.calls.append(("update", values))
-        return {"Done": True}
-
-    def delete_row(self, store_id, tag):
-        self.calls.append(("delete", tag))
-        self.store = [r for r in self.store if str(r.get("No")) != str(tag)]
         return {"Done": True}
 
 
@@ -120,11 +114,10 @@ class TestDryRun:
     def test_dry_run_writes_nothing_and_records_run(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=True), client=c, state=st)
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
         assert res.dry_run is True
         assert res.counts["add"] == 1
-        assert res.counts["update"] == 1
-        assert res.counts["delete"] == 1
+        assert "update" not in res.counts
         runs = st.recent_runs("link1")
         assert len(runs) == 1
         assert runs[0]["dry_run"] is True
@@ -132,18 +125,34 @@ class TestDryRun:
     def test_dry_run_plan_summary(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=True), client=c, state=st)
-        assert res.plan.counts == {"add": 1, "update": 1, "same": 1, "delete": 1, "conflict": 0}
+        assert res.plan.counts == {"add": 1, "update": 1, "same": 1, "conflict": 0}
+
+    def test_dry_run_records_no_proposals(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        run_sync(config(dry_run=True), client=c, state=st)
+        assert st.pending_proposals("link1") == []
 
 
 class TestApply:
-    def test_real_run_writes(self, st):
+    def test_real_run_writes_adds_only(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
         kinds = [x[0] for x in c.calls]
-        assert "add" in kinds and "update" in kinds and "delete" in kinds
+        assert "add" in kinds
+        assert "update" not in kinds       # updates are proposals, not writes
         assert res.counts["add"] == 1
-        assert res.counts["update"] == 1
-        assert res.counts["delete"] == 1
+        assert res.counts.get("update", 0) == 0
+
+    def test_real_run_records_update_proposal(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        pending = st.pending_proposals("link1")
+        assert len(pending) == 1
+        assert pending[0]["match_value"] == "102"
+        assert pending[0]["diff"] == [
+            {"col": "I7_1_2", "old": "Bob", "new": "BOB"},
+            {"col": "Q32", "old": "22", "new": "99"},
+        ]
 
     def test_run_status_recorded(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
@@ -152,14 +161,13 @@ class TestApply:
         assert run["status"] == "ok"
         assert run["counts"]["add"] == 1
 
-    def test_tracking_written_for_written_rows(self, st):
+    def test_tracking_written_for_added_rows(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
-        # updated + added keys tracked, deleted untracked
         tracked = st.tracked_keys("link1")
         assert "104" in tracked
-        assert "102" in tracked
-        assert "103" not in tracked
+        assert "102" not in tracked        # proposed, not written
+        assert "103" not in tracked        # absent, never touched
 
 
 class TestConflicts:
@@ -167,21 +175,26 @@ class TestConflicts:
         rows = store_rows() + [{"No": 9, "SbjNum": "101", "I7_1_2": "x", "Q32": 1}]
         c = FakeClient(store=rows, subjects=subjects())
         res = run_sync(config(dry_run=False), client=c, state=st)
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
         assert res.status == "blocked"
         assert res.errors
 
     def test_source_duplicate_skips_and_status_partial(self, st):
         subs = subjects() + [
-            subj("4", [("SbjNum", 104), ("T_QPM1_1", "Dup"), ("Q32", 1)])
+            subj("4", [("SbjNum", 104), ("T_QPM1_1", "Dup"), ("Q32", 1)]),
+            subj("5", [("SbjNum", 105), ("T_QPM1_1", "Eve"), ("Q32", 55)]),
         ]
         c = FakeClient(store=store_rows(), subjects=subs)
         res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
-        # source-side duplicate is skipped, but writes still happen -> partial
+        # source-side duplicate (104) is skipped, but the unique new key 105 is
+        # added -> partial
         assert res.status == "partial"
         kinds = [x[0] for x in c.calls]
-        assert "update" in kinds and "delete" in kinds
-        assert "add" not in kinds  # the duplicate key 104 is skipped
+        assert "add" in kinds
+        assert "update" not in kinds
+        tracked = st.tracked_keys("link1")
+        assert "105" in tracked
+        assert "104" not in tracked        # duplicate key skipped
         run = st.recent_runs("link1")[0]
         assert run["status"] == "partial"
 
@@ -193,9 +206,9 @@ class TestConflicts:
         conflicts = st.conflicts_for_run(run["id"])
         assert any(cf["match_value"] == "101" for cf in conflicts)
 
-    def test_write_error_recorded(self, st):
+    def test_add_error_recorded(self, st):
         class Boom(FakeClient):
-            def update_row(self, store_id, values):
+            def add_row(self, store_id, values):
                 raise STGError("server exploded")
 
         c = Boom(store=store_rows(), subjects=subjects())
@@ -207,7 +220,7 @@ class TestConflicts:
 def test_transport_error_leaves_run_finished(st):
     import requests
     class Boom(FakeClient):
-        def update_row(self, store_id, values):
+        def add_row(self, store_id, values):
             raise requests.ConnectionError("dropped")
     c = Boom(store=store_rows(), subjects=subjects())
     run_sync(config(dry_run=False), client=c, state=st, backoff=0)
@@ -216,14 +229,80 @@ def test_transport_error_leaves_run_finished(st):
     assert run["finished_at"] is not None
 
 
-class TestCancellation:
-    def test_cancelled_run_status_and_tracking(self, st):
+class TestProgress:
+    """`run_sync(progress=...)` must emit the full pipeline stage sequence."""
+
+    def test_stage_names_and_order_dry_run(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        stages = [e["stage"] for e in events]
+        assert stages == [
+            "start", "survey", "ids", "pull", "store",
+            "preflight", "plan", "apply", "applied", "proposals", "done",
+        ]
+
+    def test_stage_names_and_order_live(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(
+            config(dry_run=False), client=c, state=st,
+            throttle=0, backoff=0, progress=events.append,
+        )
+        stages = [e["stage"] for e in events]
+        assert stages == [
+            "start", "survey", "ids", "pull", "store",
+            "preflight", "plan", "apply", "applied", "proposals", "done",
+        ]
+
+    def test_events_carry_counts_where_known(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        by = {e["stage"]: e for e in events}
+        assert by["ids"]["total"] == 3          # 3 interview ids
+        assert by["pull"]["total"] == 3         # 3 pulled records
+        assert by["store"]["total"] == 3        # 3 store rows
+        assert by["plan"]["counts"] == {"add": 1, "update": 1, "same": 1, "conflict": 0}
+        assert by["apply"]["planned"] == 1      # adds only
+        assert by["applied"]["counts"] == {"add": 1}
+        assert by["applied"]["dry_run"] is True
+
+    def test_blocked_run_emits_done_with_status(self, st):
+        c = FakeClient(store=[], subjects=subjects())
+        events = []
+        res = run_sync(
+            config(dry_run=False), client=c, state=st,
+            progress=events.append,
+        )
+        assert res.status == "blocked"
+        done = [e for e in events if e["stage"] == "done"][0]
+        assert done["status"] == "blocked"
+        assert done["counts"] == {}
+        assert done["dry_run"] is False
+
+    def test_done_flags_dry_run(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        done = [e for e in events if e["stage"] == "done"][0]
+        assert done["dry_run"] is True
+
+    def test_no_progress_kwarg_still_works(self, st):
+        # Backwards-compat: progress is optional.
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=True), client=c, state=st)
+        assert res.status == "ok"
+    def test_cancelled_run_status_and_tracking(self, st):
+        subs = subjects() + [
+            subj("5", [("SbjNum", 105), ("T_QPM1_1", "Eve"), ("Q32", 55)]),
+        ]
+        c = FakeClient(store=store_rows(), subjects=subs)
         state = {"n": 0}
         def stop():
             state["n"] += 1
             return state["n"] > 1
-        res = run_sync(config(dry_run=False), client=c, state=st, should_stop=stop)
+        res = run_sync(config(dry_run=False), client=c, state=st, should_stop=stop, throttle=0, backoff=0)
         assert res.status == "cancelled"
         assert st.recent_runs("link1")[0]["status"] == "cancelled"
 
@@ -246,7 +325,7 @@ class TestReadiness:
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=False, id_column="Nope"), client=c, state=st)
         assert res.status == "blocked"
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
 
     def test_empty_store_blocks(self, st):
         c = FakeClient(store=[], subjects=subjects())
@@ -264,7 +343,7 @@ class TestReadiness:
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(cfg, client=c, state=st)
         assert res.status == "blocked"
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
         assert any("not present on the store" in e for e in res.errors)
 
     def test_missing_source_var_blocks_before_write(self, st):
@@ -278,7 +357,7 @@ class TestReadiness:
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(cfg, client=c, state=st)
         assert res.status == "blocked"
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
         assert any("not present in the pull" in e for e in res.errors)
 
     def test_strict_violation_blocks_before_write(self, st):
@@ -287,7 +366,7 @@ class TestReadiness:
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(cfg, client=c, state=st)
         assert res.status == "blocked"
-        assert [x for x in c.calls if x[0] in ("add", "update", "delete")] == []
+        assert [x for x in c.calls if x[0] in ("add", "update")] == []
         assert any("strict" in e.lower() for e in res.errors)
 
     def test_format_differs_still_runs(self, st):
@@ -303,7 +382,6 @@ class TestReadiness:
         ]
         cfg = config(
             dry_run=True,
-            delete_policy="full_history",
             columns=[
                 ColumnBinding("T_QPM1_1", "I7_1_2"),
                 ColumnBinding("PHONE", "Phone"),

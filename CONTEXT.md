@@ -37,18 +37,17 @@ _Avoid_: field, attribute.
 ## Identity
 
 **id/tag column**:
-The single store column the STG API uses to key `UpdateRow`/`DeleteRow`; its
-value is immutable. Declared per job by the operator, never guessed.
+The single store column the STG API uses to key `UpdateRow`; its value is
+immutable. Declared per job by the operator, never guessed.
 _Avoid_: primary key, id (unqualified), key column.
 
 **Match key**:
 The per-interview column (`SbjNum`) used to diff source against store — decides
-add vs update vs delete. Distinct from the id/tag column.
+add vs update (proposal). Distinct from the id/tag column.
 _Avoid_: key, identity key.
 
 **Tag value**:
-The concrete value in a row's id/tag column; `DeleteRow` takes it as a path
-segment.
+The concrete value in a row's id/tag column; `UpdateRow` keys on it.
 _Avoid_: id value (ambiguous with match key).
 
 **Adoption**:
@@ -89,23 +88,34 @@ _Avoid_: transform.
 
 **Plan**:
 The classification of every source record and store row into `add` / `update` /
-`same` / `delete` / `conflict` actions, computed by key-set difference (never by
-position or timestamp).
+`same` / `conflict` actions, computed by key-set difference (never by position or
+timestamp). `add` is written automatically; `update` is a proposal.
 _Avoid_: diff, delta.
 
 **Dry-run**:
 A run that computes the plan and writes nothing. The default.
 _Avoid_: preview, simulation.
 
-**Full sync**:
-Add + update + delete in one run.
-_Avoid_: sync (unqualified).
+**Add-only automation**:
+The write model: a run writes new rows automatically (`AddRow`) and never writes
+an update or a delete on its own. Updates become proposals; deletes do not exist.
+_Avoid_: full sync.
 
-**Delete policy**:
-How rows absent from the pull are treated: `full_history` (delete all absent),
-`tracked_only` (delete only rows this system wrote), `manual` (report
-candidates, operator ticks).
-_Avoid_: deletion mode, cleanup policy.
+**Update proposal**:
+A pending, operator-reviewed change to an existing store row. Created only when
+at least one mapped column differs byte-for-byte; carries the per-column
+`old → new` diffs. Never written until the operator applies it.
+_Avoid_: pending update, diff.
+
+**Apply selected**:
+The operator action that writes the ticked proposals, each under compare-and-swap
+(the store row must still match the recorded `old` values).
+_Avoid_: commit, confirm.
+
+**Stale proposal**:
+A proposal whose store row changed after the proposal was computed; it is skipped
+and reported rather than overwriting the manual revision.
+_Avoid_: outdated, conflicted.
 
 **Conflict**:
 An ambiguity that blocks or skips a row rather than guessing — a match key
@@ -120,7 +130,7 @@ _Avoid_: skip, drop.
 
 **Tracking**:
 The record of which match keys this system has written (and a content hash per
-row), enabling the `tracked_only` delete policy and idempotency.
+row), enabling idempotency and proposal bookkeeping.
 _Avoid_: audit trail (that is the run log).
 
 ## Running

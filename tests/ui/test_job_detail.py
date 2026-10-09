@@ -75,7 +75,7 @@ def test_config_fields_round_trip():
     assert d.config_fields() == {
         "store_id": 17620, "id_column": "No", "survey_id": "SURV",
         "match_source_var": "SbjNum", "match_store_col": "SbjNum",
-        "delete_policy": "full_history", "dry_run": True,
+        "dry_run": True,
     }
 
 
@@ -98,6 +98,119 @@ def test_set_pull_terms_and_dict_tables():
     assert d.preflight_model.rowCount() == 1
     d.set_conflicts([{"match": "m", "reason": "r", "side": "x"}])
     assert d.conflicts_model.rowCount() == 1
+
+
+def test_proposals_empty_state_by_default():
+    d = JobDetail()
+    d.load(E(), a_job())
+    assert d.proposals_model.rowCount() == 0
+    assert not d.proposals_empty_label.isHidden()
+    assert d.proposals_view.isVisible() is False
+
+
+def test_set_proposals_renders_diffs_and_clears_empty_state():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_proposals([
+        {"id": 7, "match_value": "102", "id_value": 2,
+         "diff": [{"col": "Q32", "old": "22", "new": "99"}]},
+    ])
+    assert d.proposals_model.rowCount() == 1
+    assert d.proposals_empty_label.isHidden()
+    assert "Q32: 22 → 99" in d.proposals_model.index(0, 3).data(Qt.DisplayRole)
+    assert d.proposals_model.index(0, 1).data(Qt.DisplayRole) == "102"
+
+
+def test_apply_proposals_emits_checked_ids():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_proposals([
+        {"id": 7, "match_value": "102", "id_value": 2, "diff": []},
+        {"id": 8, "match_value": "103", "id_value": 3, "diff": []},
+    ])
+    seen = []
+    d.apply_proposals_requested.connect(seen.append)
+    # tick row 0 only
+    d.proposals_model.setData(d.proposals_model.index(0, 0), Qt.Checked, Qt.CheckStateRole)
+    d.apply_button.click()
+    assert seen == [[7]]
+
+
+def test_dismiss_proposals_emits_checked_ids():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_proposals([{"id": 5, "match_value": "1", "id_value": 1, "diff": []}])
+    seen = []
+    d.dismiss_proposals_requested.connect(seen.append)
+    d.proposals_model.setData(d.proposals_model.index(0, 0), Qt.Checked, Qt.CheckStateRole)
+    d.dismiss_button.click()
+    assert seen == [[5]]
+
+
+def test_select_all_checks_every_row():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_proposals([
+        {"id": 1, "match_value": "a", "id_value": 1, "diff": []},
+        {"id": 2, "match_value": "b", "id_value": 2, "diff": []},
+    ])
+    d.select_all_button.click()
+    assert d.proposals_model.checked_ids() == [1, 2]
+    d.select_none_button.click()
+    assert d.proposals_model.checked_ids() == []
+
+
+def test_reload_clears_proposals():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_proposals([{"id": 1, "match_value": "a", "id_value": 1, "diff": []}])
+    assert d.proposals_model.rowCount() == 1
+    d.load(E(), b_job())
+    # Fresh load must not carry the previous job's proposals.
+    assert d.proposals_model.rowCount() == 0
+
+
+def test_run_progress_panel_visible_on_start():
+    d = JobDetail()
+    d.load(E(), a_job())
+    assert not d.progress_panel.isVisible() or d.progress_panel.isHidden()
+    d.set_run_progress({"stage": "start", "job": "a", "dry_run": True})
+    assert d.progress_panel.isVisibleTo(d) or not d.progress_panel.isHidden()
+    assert "a" in d.progress_label.text()
+
+
+def test_run_progress_text_per_stage():
+    d = JobDetail()
+    d.load(E(), a_job())
+    for ev in (
+        {"stage": "survey"},
+        {"stage": "ids", "total": 296},
+        {"stage": "pull", "total": 296},
+        {"stage": "store", "total": 1},
+        {"stage": "plan", "counts": {"add": 296, "delete": 1}},
+        {"stage": "apply", "dry_run": True, "planned": 297},
+        {"stage": "applied", "dry_run": True, "counts": {"add": 296, "delete": 1}},
+        {"stage": "done", "status": "ok", "counts": {"add": 296}, "dry_run": True},
+    ):
+        d.set_run_progress(ev)
+    text = d.progress_text.toPlainText()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    assert len(lines) == 8
+    assert "survey" in lines[0]
+    assert "296" in lines[1] and "interview" in lines[1]
+    assert "plan" in lines[4].lower()
+    assert "dry run" in lines[6].lower()
+    assert "ok" in lines[7].lower()
+    assert "dry run" in lines[7].lower()  # the finished line flags simulation too
+
+
+def test_run_progress_cleared_and_hidden():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "survey"})
+    d.clear_run_progress()
+    assert d.progress_text.toPlainText() == ""
+    assert d.progress_panel.isHidden()
 
 def test_reload_clears_stale_pull_terms():
     d = JobDetail()

@@ -1,7 +1,7 @@
 """Tests for store_sync.core.planner — diff store vs source by match key.
 
-Classifications: ADD / UPDATE / SAME / DELETE / CONFLICT. Fail-closed rules
-from spec §4.4; empty is a value (spec §5.3).
+Classifications: ADD / UPDATE / SAME / CONFLICT. Fail-closed rules from spec
+§4.4; empty is a value (spec §5.3). No delete: absent store rows are untouched.
 """
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ def make_plan(**kw):
         match=MATCH,
         columns=COLUMNS,
         id_column="No",
-        delete_policy="full_history",
     )
     args.update(kw)
     return plan(**args)
@@ -68,12 +67,10 @@ class TestClassification:
         same = [a for a in p.actions if a.kind == "same"]
         assert [a.match_value for a in same] == ["101"]
 
-    def test_deletes_absent_keys_full_history(self):
+    def test_absent_store_key_is_not_deleted(self):
         p = make_plan()
-        dels = [a for a in p.actions if a.kind == "delete"]
-        assert len(dels) == 1
-        assert dels[0].match_value == "103"
-        assert dels[0].id_value == 3
+        assert [a for a in p.actions if a.kind == "delete"] == []
+        assert not hasattr(p, "delete_candidates")
 
     def test_action_carries_full_payload(self):
         p = make_plan()
@@ -81,6 +78,28 @@ class TestClassification:
         assert add.payload == {"SbjNum": "104", "I7_1_2": "Dave", "Q32": 44, "No": 4}
         upd = next(a for a in p.actions if a.kind == "update")
         assert upd.payload == {"SbjNum": "102", "I7_1_2": "BOB", "Q32": 99, "No": 2}
+
+
+class TestDiffs:
+    def test_update_carries_per_column_diffs(self):
+        p = make_plan()
+        upd = next(a for a in p.actions if a.kind == "update")
+        assert upd.diffs == [
+            {"col": "I7_1_2", "old": "Bob", "new": "BOB"},
+            {"col": "Q32", "old": "22", "new": "99"},
+        ]
+
+    def test_same_action_has_no_diffs(self):
+        p = make_plan()
+        same = next(a for a in p.actions if a.kind == "same")
+        assert same.diffs == []
+
+    def test_no_false_positive_when_only_string_form_differs(self):
+        # store Q32 is int 11, source Q32 is "11" → equal after str(), no diff
+        p = make_plan()
+        same_keys = [a.match_value for a in p.actions if a.kind == "same"]
+        assert "101" in same_keys
+        assert "101" not in [a.match_value for a in p.actions if a.kind == "update"]
 
 
 class TestFullColumnPayload:
@@ -100,24 +119,6 @@ class TestFullColumnPayload:
         assert upd.payload["Extra"] == "keep"   # untouched store value retained
         assert upd.payload["Q32"] == 99
         assert upd.payload["No"] == 2
-
-
-class TestDeletePolicy:
-    def test_tracked_only_deletes_none_when_untracked(self):
-        p = make_plan(delete_policy="tracked_only")
-        assert [a for a in p.actions if a.kind == "delete"] == []
-        # but the candidate is still reported
-        assert "103" in p.delete_candidates
-
-    def test_tracked_only_deletes_tracked_keys(self):
-        p = make_plan(delete_policy="tracked_only", tracked={"103"})
-        dels = [a for a in p.actions if a.kind == "delete"]
-        assert [a.match_value for a in dels] == ["103"]
-
-    def test_manual_reports_but_does_not_delete(self):
-        p = make_plan(delete_policy="manual")
-        assert [a for a in p.actions if a.kind == "delete"] == []
-        assert "103" in p.delete_candidates
 
 
 class TestFailClosed:
@@ -151,7 +152,7 @@ class TestFailClosed:
         rows.append({"No": 9, "SbjNum": "101", "I7_1_2": "Other", "Q32": 1})
         p = make_plan(store_rows=rows)
         assert not any(
-            a.kind in ("add", "update", "delete") and a.match_value == "101"
+            a.kind in ("add", "update") and a.match_value == "101"
             for a in p.actions
         )
 
@@ -213,4 +214,4 @@ class TestNextTag:
 class TestCounts:
     def test_summary_counts(self):
         p = make_plan()
-        assert p.counts == {"add": 1, "update": 1, "same": 1, "delete": 1, "conflict": 0}
+        assert p.counts == {"add": 1, "update": 1, "same": 1, "conflict": 0}

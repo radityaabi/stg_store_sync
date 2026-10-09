@@ -2,12 +2,15 @@
 
     survey XML -> index -> derive pull terms -> pull (filter/fallback)
     store GetStore -> plan (diff by match key)
-    writer.apply (or dry-run)
+    writer.apply (adds only; or dry-run) -> record update proposals
     state.record_run
 
 The `state` run row and conflicts are written regardless of dry-run, so the GUI
 run log is complete. A store-side duplicate key is a hard conflict: the job is
 marked `blocked` and **no write happens** (fail-closed, §4.4).
+
+**Automation writes ADD only.** `update` actions are recorded as pending
+proposals for operator review (never written here); there is no delete.
 """
 from __future__ import annotations
 
@@ -59,6 +62,7 @@ class SyncResult:
     counts: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     run_id: int | None = None
+    proposals: int = 0  # update proposals recorded for operator review
 
 
 def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
@@ -109,15 +113,31 @@ def run_sync(
     max_retries: int = 3,
     backoff: float = 1.0,
     should_stop=None,
+    progress=None,
 ) -> SyncResult:
     """Run one full sync (dry-run by default per `config.write.dry_run`).
 
     `should_stop` is an optional zero-arg predicate polled between pull chunks
     and between write actions; when it trips the run is finished `cancelled`
     and any writes already applied stay tracked.
+
+    `progress` is an optional callable receiving one dict per pipeline stage
+    (``{"stage": "survey"|"ids"|"pull"|"store"|"preflight"|"plan"|"apply"|"done",
+    ...}``; extra keys carry stage payloads like ``total`` or ``counts``). It is
+    called synchronously from the worker thread — the GUI marshals it through a
+    queued signal (see ``Controller._ProgressBridge``).
     """
+
+    def _emit(stage: str, **payload) -> None:
+        if progress is not None:
+            try:
+                progress({"stage": stage, **payload})
+            except Exception:  # noqa: BLE001 - progress must never break a run
+                logger.debug("progress callback failed", exc_info=True)
+
     dry_run = config.write.dry_run
     run_id = state.start_run(job=config.job, dry_run=dry_run)
+    _emit("start", job=config.job, run_id=run_id, dry_run=dry_run)
 
     # The run row must never be left with a null status, so every terminal path
     # funnels through this one-shot finisher. The `finally` is a last resort
@@ -135,8 +155,10 @@ def run_sync(
 
     try:
         # 1) survey index + pull ---------------------------------------------
+        _emit("survey")
         index = parse_survey_index(client.get_survey_xml(config.source.survey_id))
         subject_ids = client.survey_interview_ids(config.source.survey_id)
+        _emit("ids", total=len(subject_ids))
         match = config.binding.match
         try:
             pulled = pull(
@@ -150,22 +172,25 @@ def run_sync(
             )
         except Cancelled:
             _finish("cancelled", {})
+            _emit("done", status="cancelled", counts={}, dry_run=dry_run)
             return SyncResult(
                 plan=p, dry_run=dry_run, status="cancelled", counts={},
                 errors=errors, run_id=run_id,
             )
+        _emit("pull", total=len(pulled.records))
 
         # 2) load the store --------------------------------------------------
         store_rows = client.get_store(config.store.id)
+        _emit("store", total=len(store_rows))
         store_columns = sorted({k for r in store_rows for k in r})
 
         # readiness preconditions (computed early; acted on before any write).
         # We defer the block until after conflict recording so the run log stays
         # complete for store-side duplicates the planner already flags.
         readiness_errs = _readiness_errors(config, store_rows, pulled.records)
+        _emit("preflight", errors=list(readiness_errs))
 
         # 3) plan ------------------------------------------------------------
-        tracked = state.tracked_keys(config.job)
         p = plan(
             store_rows=store_rows,
             source_records=pulled.records,
@@ -173,9 +198,8 @@ def run_sync(
             columns=config.binding.columns,
             id_column=config.store.id_column,
             store_columns=store_columns,
-            delete_policy=config.write.delete_policy,
-            tracked=tracked,
         )
+        _emit("plan", counts=dict(p.counts))
 
         # record conflicts/quarantine (always, dry-run included)
         for action in p.actions:
@@ -193,6 +217,7 @@ def run_sync(
             for err in readiness_errs:
                 state.record_conflict(run_id, match_value=None, reason=err)
             _finish("blocked", {})
+            _emit("done", status="blocked", counts={}, dry_run=dry_run)
             return SyncResult(
                 plan=p, dry_run=dry_run, status="blocked", counts={},
                 errors=list(readiness_errs), run_id=run_id,
@@ -202,6 +227,7 @@ def run_sync(
         if p.blocked:
             errors.extend(a.reason for a in p.actions if a.kind == "conflict")
             _finish("blocked", p.counts)
+            _emit("done", status="blocked", counts=dict(p.counts), dry_run=dry_run)
             return SyncResult(plan=p, dry_run=dry_run, status="blocked",
                               counts=p.counts, errors=errors, run_id=run_id)
 
@@ -211,7 +237,9 @@ def run_sync(
             a.kind == "conflict" and a.side == "source" for a in p.actions
         )
 
-        # 5) apply -----------------------------------------------------------
+        # 5) apply adds (updates are proposals, never auto-written) ----------
+        todo_kinds = [a.kind for a in p.actions if a.kind == "add"]
+        _emit("apply", dry_run=dry_run, planned=len(todo_kinds))
         wres = apply_plan(
             client,
             config.store.id,
@@ -224,26 +252,41 @@ def run_sync(
             should_stop=should_stop,
         )
         errors.extend(wres.errors)
+        _emit("applied", counts=dict(wres.counts), dry_run=dry_run)
 
-        # 6) tracking (only real writes) -------------------------------------
+        # 5b) record update proposals (pending operator approval) ------------
+        proposals = 0
         if not dry_run:
-            for action in wres.applied:
-                if action.kind == "delete":
-                    state.untrack_row(job=config.job, match_value=action.match_value)
-                else:
-                    state.track_row(
+            for action in p.actions:
+                if action.kind == "update":
+                    state.record_proposal(
+                        run_id,
                         job=config.job,
                         match_value=action.match_value,
-                        row_hash=state.row_hash(action.payload),
+                        id_value=action.id_value,
+                        payload=action.payload,
+                        diff=action.diffs,
                     )
+                    proposals += 1
+        _emit("proposals", count=proposals)
+
+        # 6) tracking (only real writes; adds) -------------------------------
+        if not dry_run:
+            for action in wres.applied:
+                state.track_row(
+                    job=config.job,
+                    match_value=action.match_value,
+                    row_hash=state.row_hash(action.payload),
+                )
 
         # A cooperative stop mid-apply: writes already applied stay tracked,
         # and the run is finished exactly once as `cancelled`.
         if wres.cancelled:
             _finish("cancelled", wres.counts)
+            _emit("done", status="cancelled", counts=dict(wres.counts), dry_run=dry_run)
             return SyncResult(
                 plan=p, dry_run=dry_run, status="cancelled", counts=wres.counts,
-                errors=errors, run_id=run_id,
+                errors=errors, run_id=run_id, proposals=proposals,
             )
 
         if errors:
@@ -254,14 +297,16 @@ def run_sync(
             status = "ok"
 
         _finish(status, wres.counts)
+        _emit("done", status=status, counts=dict(wres.counts), errors=list(errors), dry_run=dry_run)
         return SyncResult(
             plan=p, dry_run=dry_run, status=status, counts=wres.counts,
-            errors=errors, run_id=run_id,
+            errors=errors, run_id=run_id, proposals=proposals,
         )
     except Exception as e:  # noqa: BLE001 - guarantee a finished run
         logger.exception("unexpected error during run_sync")
         errors.append(f"unexpected error: {e}")
         _finish("error", {})
+        _emit("done", status="error", counts={}, dry_run=dry_run)
         return SyncResult(
             plan=p, dry_run=dry_run, status="error", counts={},
             errors=errors, run_id=run_id,

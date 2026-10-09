@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS tracked (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (job, match_value)
 );
+CREATE TABLE IF NOT EXISTS proposals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL,
+    job         TEXT    NOT NULL,
+    match_value TEXT    NOT NULL,
+    id_value    TEXT,
+    payload     TEXT    NOT NULL,
+    diff        TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'pending',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    decided_at  TEXT
+);
 """
 
 
@@ -82,6 +94,22 @@ class State:
     def get_run(self, run_id: int) -> dict | None:
         row = self.conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return self._run_row(row) if row else None
+
+    def recover_orphan_runs(self) -> int:
+        """Mark runs left unfinished by a crash/exit as ``interrupted``.
+
+        A run row is written at start and finished on every terminal path, so a
+        NULL status can only mean the process died mid-run (or was killed). The
+        app calls this once at startup so the run log never shows a perpetually
+        running row. Returns the number of rows recovered.
+        """
+        cur = self.conn.execute(
+            "UPDATE runs SET status = 'interrupted', "
+            "counts = COALESCE(counts, '{}'), finished_at = datetime('now') "
+            "WHERE status IS NULL"
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def recent_runs(self, job: str, *, limit: int = 20) -> list[dict]:
         rows = self.conn.execute(
@@ -140,3 +168,64 @@ class State:
             (job, str(match_value)),
         ).fetchone()
         return row["row_hash"] if row else None
+
+    # -- proposals ---------------------------------------------------------
+
+    @staticmethod
+    def _proposal_row(row: sqlite3.Row) -> dict:
+        d = dict(row)
+        d["payload"] = json.loads(d["payload"])
+        d["diff"] = json.loads(d["diff"])
+        return d
+
+    def record_proposal(
+        self,
+        run_id: int,
+        *,
+        job: str,
+        match_value,
+        id_value,
+        payload: dict,
+        diff: list,
+    ) -> int:
+        """Record a pending update proposal (an `update` action's diff)."""
+        cur = self.conn.execute(
+            "INSERT INTO proposals (run_id, job, match_value, id_value, payload, diff) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                job,
+                str(match_value),
+                "" if id_value is None else str(id_value),
+                json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str),
+                json.dumps(diff, ensure_ascii=False, default=str),
+            ),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def pending_proposals(self, job: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM proposals WHERE job = ? AND status = 'pending' ORDER BY id",
+            (job,),
+        ).fetchall()
+        return [self._proposal_row(r) for r in rows]
+
+    def proposals_for_run(self, run_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM proposals WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [self._proposal_row(r) for r in rows]
+
+    def set_proposal_status(self, proposal_id: int, status: str) -> None:
+        self.conn.execute(
+            "UPDATE proposals SET status = ?, decided_at = datetime('now') WHERE id = ?",
+            (status, proposal_id),
+        )
+        self.conn.commit()
+
+    def get_proposal(self, proposal_id: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        return self._proposal_row(row) if row else None

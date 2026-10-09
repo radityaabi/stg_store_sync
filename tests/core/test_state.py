@@ -36,6 +36,21 @@ class TestRuns:
         assert len(runs) == 2
         assert runs[0]["id"] > runs[1]["id"]
 
+    def test_recover_orphan_runs_marks_unfinished(self, st):
+        done = st.start_run(job="j", dry_run=True)
+        st.finish_run(done, status="ok", counts={})
+        orphan = st.start_run(job="j", dry_run=False)  # crash mid-run
+        assert st.recover_orphan_runs() == 1
+        recovered = st.get_run(orphan)
+        assert recovered["status"] == "interrupted"
+        assert recovered["finished_at"] is not None
+        assert st.get_run(done)["status"] == "ok"  # untouched
+
+    def test_recover_orphan_runs_noop_when_clean(self, st):
+        rid = st.start_run(job="j", dry_run=True)
+        st.finish_run(rid, status="ok", counts={})
+        assert st.recover_orphan_runs() == 0
+
 
 class TestConflicts:
     def test_record_conflict(self, st):
@@ -72,3 +87,46 @@ class TestHashes:
         st.track_row(job="j", match_value="101", row_hash="h2")
         assert st.tracked_keys("j") == {"101"}
         assert st.tracked_hash("j", "101") == "h2"
+
+
+class TestProposals:
+    def _record(self, st, *, run_id, job="j", match="102", id_value=2):
+        return st.record_proposal(
+            run_id,
+            job=job,
+            match_value=match,
+            id_value=id_value,
+            payload={"No": id_value, "SbjNum": match, "Q32": "99"},
+            diff=[{"col": "Q32", "old": "22", "new": "99"}],
+        )
+
+    def test_record_and_read_pending(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        pid = self._record(st, run_id=rid)
+        pending = st.pending_proposals("j")
+        assert len(pending) == 1
+        assert pending[0]["id"] == pid
+        assert pending[0]["match_value"] == "102"
+        assert pending[0]["payload"]["Q32"] == "99"
+        assert pending[0]["diff"] == [{"col": "Q32", "old": "22", "new": "99"}]
+        assert pending[0]["status"] == "pending"
+
+    def test_status_transition_removes_from_pending(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        pid = self._record(st, run_id=rid)
+        st.set_proposal_status(pid, "applied")
+        assert st.pending_proposals("j") == []
+        got = st.get_proposal(pid)
+        assert got["status"] == "applied"
+        assert got["decided_at"] is not None
+
+    def test_pending_scoped_to_job(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        self._record(st, run_id=rid, job="j")
+        self._record(st, run_id=rid, job="other", match="9")
+        assert [p["match_value"] for p in st.pending_proposals("j")] == ["102"]
+
+    def test_proposals_for_run(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        self._record(st, run_id=rid)
+        assert len(st.proposals_for_run(rid)) == 1

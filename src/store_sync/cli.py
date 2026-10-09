@@ -122,7 +122,10 @@ def _close_client(client) -> None:
 
 
 def _status_line(name: str, res) -> str:
-    return f"{name}: {res.status} (dry_run={res.dry_run}) {res.counts}"
+    base = f"{name}: {res.status} (dry_run={res.dry_run}) {res.counts}"
+    if getattr(res, "proposals", 0):
+        base += f" · {res.proposals} update proposal(s) pending review"
+    return base
 
 
 def _emit(name: str, res, *, as_json: bool) -> None:
@@ -133,6 +136,7 @@ def _emit(name: str, res, *, as_json: bool) -> None:
                 "dry_run": res.dry_run,
                 "status": res.status,
                 "counts": res.counts,
+                "proposals": getattr(res, "proposals", 0),
                 "errors": res.errors,
             },
             indent=2,

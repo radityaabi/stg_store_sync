@@ -39,12 +39,6 @@ from store_sync.core.config import (
 from store_sync.ui.job_table_model import JobTableModel
 from store_sync.ui.models import _DictTableModel
 
-DELETE_POLICIES = [
-    ("Full history", "full_history"),
-    ("Tracked only", "tracked_only"),
-    ("Manual", "manual"),
-]
-
 SCHEDULE_UNIT_ITEMS = [
     ("Manual", ""),
     ("Every minute", "minute"),
@@ -126,10 +120,6 @@ class JobDialog(QDialog):
         form.addRow("Match var", self.match_var_edit)
         self.match_store_edit = QLineEdit()
         form.addRow("Match store col", self.match_store_edit)
-        self.delete_policy_combo = QComboBox()
-        for label, value in DELETE_POLICIES:
-            self.delete_policy_combo.addItem(label, value)
-        form.addRow("Delete policy", self.delete_policy_combo)
         self.dry_run_check = QCheckBox("Dry run")
         self.dry_run_check.setChecked(True)
         form.addRow("", self.dry_run_check)
@@ -193,9 +183,6 @@ class JobDialog(QDialog):
             self.match_store_edit.setText(
                 match.store_col if match else ""
             )
-            idx = self.delete_policy_combo.findData(job.write.delete_policy)
-            if idx >= 0:
-                self.delete_policy_combo.setCurrentIndex(idx)
             self.dry_run_check.setChecked(bool(job.write.dry_run))
             self.binding_model.set_columns(job.binding.columns)
 
@@ -218,7 +205,6 @@ class JobDialog(QDialog):
             ),
             write=WriteConfig(
                 dry_run=self.dry_run_check.isChecked(),
-                delete_policy=self.delete_policy_combo.currentData(),
             ),
         )
 

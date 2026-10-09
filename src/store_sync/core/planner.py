@@ -1,8 +1,11 @@
 """Planner: diff pulled records against store rows by match key.
 
-Produces a `Plan` of `Action`s (add / update / same / delete / conflict) plus
+Produces a `Plan` of `Action`s (add / update / same / conflict) plus
 quarantined records, following the fail-closed rules in spec §4.4 and the value
 rules in §5.3 (empty is a value; comparison is byte-for-byte after str()).
+
+Only `add` is applied automatically; an `update` is a **proposal** carrying the
+per-column diffs and is written only on operator approval. There is no delete.
 
 Lookup is by key-set difference, never by position or timestamp (§4.2).
 """
@@ -17,25 +20,25 @@ from store_sync.core.config import ColumnBinding
 
 @dataclass
 class Action:
-    kind: str  # "add" | "update" | "same" | "delete" | "conflict"
+    kind: str  # "add" | "update" | "same" | "conflict"
     match_value: str
     id_column: str = ""
     id_value: object = None
     payload: dict = field(default_factory=dict)
     reason: str = ""
     side: str = ""  # "store" | "source" on conflicts; "" otherwise
+    diffs: list = field(default_factory=list)  # [{"col","old","new"}] for update
 
 
 @dataclass
 class Plan:
     actions: list[Action] = field(default_factory=list)
     quarantined: list[dict] = field(default_factory=list)
-    delete_candidates: list[str] = field(default_factory=list)
     next_tag: int = 1
 
     @property
     def counts(self) -> dict[str, int]:
-        c = {"add": 0, "update": 0, "same": 0, "delete": 0, "conflict": 0}
+        c = {"add": 0, "update": 0, "same": 0, "conflict": 0}
         for a in self.actions:
             c[a.kind] = c.get(a.kind, 0) + 1
         return c
@@ -79,18 +82,23 @@ def plan(
     columns: list[ColumnBinding],
     id_column: str,
     store_columns: list[str] | None = None,
-    delete_policy: str = "full_history",
-    tracked: set[str] | None = None,
 ) -> Plan:
     """Classify every source record and store row into a write plan.
+
+    Only ``add`` and ``update`` are write-bearing; ``same`` is a no-op and
+    ``conflict`` halts (store side) or skips (source side). Store rows absent
+    from the source are **left untouched** — the tool never deletes (spec §6).
 
     ``store_columns`` is the store's full column set. STG ``AddRow``/``UpdateRow``
     reset any omitted column to its default, so payloads must carry every column:
     ADD blanks unmapped columns, UPDATE retains the existing row's values.
+
+    An ``update`` action carries a per-column ``diffs`` list
+    (``[{"col", "old", "new"}]``) computed byte-for-byte on ``str()``; a row with
+    no diffs is classified ``same`` and produces no write proposal.
     """
     p = Plan()
     p.next_tag = _next_tag(store_rows, id_column)
-    tracked = {_s(t) for t in (tracked or set())}
     if store_columns is None:
         store_columns = sorted({k for r in store_rows for k in r})
 
@@ -162,24 +170,17 @@ def plan(
         payload.update(desired)
         payload[match.store_col] = key
         payload[id_column] = id_value
-        if any(_s(desired[c.store_col]) != _s(row.get(c.store_col)) for c in columns):
-            p.actions.append(Action("update", key, id_column, id_value, payload))
+        diffs = [
+            {"col": c.store_col, "old": _s(row.get(c.store_col)), "new": _s(desired[c.store_col])}
+            for c in columns
+            if _s(desired[c.store_col]) != _s(row.get(c.store_col))
+        ]
+        if diffs:
+            p.actions.append(Action("update", key, id_column, id_value, payload, diffs=diffs))
         else:
             p.actions.append(Action("same", key, id_column, id_value, payload))
 
-    # -- deletes -------------------------------------------------------------
-    absent = set(store_keys) - set(src_keys)
-    p.delete_candidates = sorted(absent)
-    for key in sorted(absent):
-        if key in store_dups:
-            continue
-        row = store_by_key[key]
-        id_value = row.get(id_column)
-        if delete_policy == "full_history":
-            p.actions.append(Action("delete", key, id_column, id_value))
-        elif delete_policy == "tracked_only":
-            if key in tracked:
-                p.actions.append(Action("delete", key, id_column, id_value))
-        # "manual": report candidates only (no delete actions)
+    # Store rows absent from the source are deliberately left untouched: the
+    # tool never deletes (spec §6). A short/failed pull must not imply deletion.
 
     return p

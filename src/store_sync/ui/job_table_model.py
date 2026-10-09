@@ -1,4 +1,4 @@
-"""Editable binding table model: store column · source variable · pull term · kind."""
+"""Editable binding table model: store column · source variable · pull term."""
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
@@ -12,17 +12,20 @@ _MUTED = QColor(theme.TOKENS["colors"]["secondary"])
 
 
 class JobTableModel(QAbstractTableModel):
-    """Editable binding table: store column · source variable · pull term · kind.
+    """Editable binding table: store column · source variable · pull term.
 
     The pull term column is **read-only** — it is derived, not entered (§7.3).
+    No `kind` column: the STG API exposes no store column type, so kind was
+    never more than a manual guess (see mapping_io.HEADERS).
     """
 
-    HEADERS = ["Store column", "Source variable", "Pull term (derived)", "Kind"]
+    HEADERS = ["Store column", "Source variable", "Pull term (derived)"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._columns: list[ColumnBinding] = []
         self._pull_terms: dict[str, str] = {}
+        # kind: deliberately NOT surfaced in the UI (no API source of truth).
 
     # -- Qt API ------------------------------------------------------------
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -48,8 +51,6 @@ class JobTableModel(QAbstractTableModel):
                 return col.source_var
             if c == 2:
                 return self._pull_terms.get(col.source_var, "")
-            if c == 3:
-                return col.kind
         if role == Qt.ForegroundRole and c == 2:
             return _MUTED  # derived/read-only
         return None
@@ -70,8 +71,6 @@ class JobTableModel(QAbstractTableModel):
             col.store_col = value
         elif c == 1:
             col.source_var = value
-        elif c == 3:
-            col.kind = value or "text"
         else:
             return False
         self.dataChanged.emit(index, index)
@@ -95,7 +94,7 @@ class JobTableModel(QAbstractTableModel):
 
     def add_row(self, binding: ColumnBinding | None = None) -> None:
         self.beginInsertRows(QModelIndex(), len(self._columns), len(self._columns))
-        self._columns.append(binding or ColumnBinding("", "", "text"))
+        self._columns.append(binding or ColumnBinding("", ""))
         self.endInsertRows()
 
     def remove_row(self, row: int) -> None:

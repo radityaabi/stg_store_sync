@@ -1,17 +1,21 @@
 # stg-store-sync
 
 Standalone tool that pulls SurveyToGo (STG / Dooblo) interview data and
-full-syncs selected columns into a target **Subject Store** (External List) via
+syncs selected columns into a target **Subject Store** (External List) via
 the STG REST API.
 
 - Source of truth: a source survey's interviews (`/SurveyInterviewIDs` +
   `/SimpleExport`).
 - Target: an STG Subject Store, written via
-  `/SubjectStores/AddRow|UpdateRow|DeleteRow`.
+  `/SubjectStores/AddRow` (adds) and `/SubjectStores/UpdateRow` (approved
+  proposals only). It never deletes.
 - Identity: a store **id/tag column declared per job** (e.g. `uniqueID`) keys the
   writes; a separate **match key** (`SbjNum`, per-interview) drives the diff.
 - Lookup: by key-set difference — never by row position.
 - Fail-closed: ambiguous keys are quarantined, never guessed.
+- Write model: **adds are automated**; a changed row becomes an **update
+  proposal** the operator reviews and applies (compare-and-swap); **delete does
+  not exist**.
 - Columns are mapped by an operator-approved `source → store` alias pair (or an
   **Excel mapping upload**); the pull term is derived, not hand-entered.
 - GUI with a **Sync** button; dry-run is the default.
@@ -29,11 +33,9 @@ verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not starte
 ### Key write-model facts (verified live)
 
 - A store has one **API id/tag column** (`No`, `uniqueID`, …) that keys
-  `UpdateRow`/`DeleteRow`; it is store-specific and must be declared per job.
+  `UpdateRow`; it is store-specific and must be declared per job.
 - `UpdateRow` is an **upsert** on that column and **must receive every column**
   (omitted ones are reset). The id value is immutable.
-- `DeleteRow` takes the tag value as a **path** segment and always returns
-  `{Done: true}` — re-read the store to confirm.
 - `AddRow`/`UpdateRow` **cannot** create a column; columns must pre-exist in
   STG Studio.
 
@@ -58,5 +60,6 @@ cp .env.example .env   # fill STG_SERVER / STG_USER / STG_PASSWORD
 ## Safety
 
 The target store may be used by a **LIVE** survey. Writes change production
-data. Dry-run is the default; deletion requires an explicit policy and
-confirmation.
+data. Dry-run is the default. Updates are never automatic — a run only proposes
+them, and the operator applies each under compare-and-swap; the tool never
+deletes.

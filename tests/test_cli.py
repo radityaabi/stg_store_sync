@@ -19,6 +19,18 @@ from store_sync.core.registry import Registry
 from store_sync.core.sync import SyncResult
 
 
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Keep the developer's local `.env` out of the CLI tests.
+
+    `cli.main()` calls `load_dotenv()` unconditionally, which re-populates
+    `STG_SERVER`/`STG_USER`/`STG_PASSWORD` from a real `.env` on disk and defeats
+    a test's `clear_creds`. The tests set credentials explicitly, so neutralise
+    the load for the whole module.
+    """
+    monkeypatch.setattr(cli, "load_dotenv", lambda *a, **k: None)
+
+
 def a_job(name="a", *, dry_run=True, store_id=17620):
     return JobConfig(
         name,
@@ -163,6 +175,42 @@ class TestRun:
         monkeypatch.setattr(cli, "run_sync", fake_run_sync)
         assert main(["run", "a", "--no-dry-run"]) == 0
         assert seen["dry_run"] is False
+
+    def test_run_reports_proposal_count(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a", dry_run=False)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+
+        def fake_run_sync(job, **kw):
+            res = _result("ok", dry_run=False, counts={"add": 1})
+            res.proposals = 2
+            return res
+
+        monkeypatch.setattr(cli, "run_sync", fake_run_sync)
+        assert main(["run", "a"]) == 0
+        out = capsys.readouterr().out
+        assert "2 update proposal(s)" in out
+
+    def test_run_json_includes_proposals(self, tmp_path, capsys, monkeypatch):
+        import json
+
+        db = tmp_path / "s.db"
+        add_job(db, "a", dry_run=False)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+
+        def fake_run_sync(job, **kw):
+            res = _result("ok", dry_run=False, counts={"add": 1})
+            res.proposals = 3
+            return res
+
+        monkeypatch.setattr(cli, "run_sync", fake_run_sync)
+        assert main(["run", "a", "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["proposals"] == 3
 
 
 class TestRunAll:

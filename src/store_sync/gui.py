@@ -42,7 +42,10 @@ from store_sync.core.run_queue import RunQueue  # noqa: E402
 from store_sync.core.scheduler import Scheduler  # noqa: E402
 from store_sync.core.stg_client import STGClient  # noqa: E402
 from store_sync.core.state import State  # noqa: E402
+from store_sync.core.planner import Action  # noqa: E402
+from store_sync.core.writer import apply_updates  # noqa: E402
 from store_sync.core.sync import run_preflight, run_sync  # noqa: E402
+from store_sync.ui.job_detail import _progress_line  # noqa: E402
 from store_sync.ui.main_window import MainWindow  # noqa: E402
 from store_sync.ui.dialogs import ScheduleOverview  # noqa: E402
 from store_sync.ui.mapping_io import export_template, parse_mapping  # noqa: E402
@@ -72,11 +75,34 @@ def _enable_wal(conn) -> None:
         logger.debug("journal_mode=WAL unavailable", exc_info=True)
 
 
-def _fmt_counts(counts) -> str:
-    """`{add: 1}` → `"add 1"` for the History tab's counts cell."""
+def _fmt_counts(counts, *, dry_run: bool = False) -> str:
+    """`{add: 1}` → `"add 1"`; a dry run's counts get a `(dry run)` suffix.
+
+    Without the marker the History/counts cells look identical for a simulated
+    and a real run, which misleads the operator into thinking writes happened.
+    """
     if not counts:
-        return ""
-    return ", ".join(f"{k} {v}" for k, v in counts.items())
+        return "(dry run)" if dry_run else ""
+    text = ", ".join(f"{k} {v}" for k, v in counts.items())
+    return f"{text} (dry run)" if dry_run else text
+
+
+def _short(exc: Exception) -> str:
+    """A one-line, length-capped reason for a status-bar error message."""
+    msg = " ".join(str(exc).split()) or exc.__class__.__name__
+    return msg if len(msg) <= 90 else msg[:87] + "..."
+
+
+def _action_from_proposal(p: dict) -> Action:
+    """Rebuild the `Action` `writer.apply_updates` needs from a stored proposal."""
+    return Action(
+        "update",
+        p["match_value"],
+        "",
+        p.get("id_value"),
+        p.get("payload", {}),
+        diffs=p.get("diff", []),
+    )
 
 
 def _run_log(run: dict) -> str:
@@ -99,6 +125,17 @@ class _QueueBridge(QObject):
     `RunQueue` invokes its subscribers from the worker thread; Qt widgets must
     only be touched on the GUI thread, so the subscription emits this signal and
     the controller's slot runs queued on the main thread.
+    """
+
+    changed = Signal(object)
+
+
+class _ProgressBridge(QObject):
+    """Marshal `run_sync` progress events onto the GUI thread.
+
+    `run_sync` calls its `progress` callback synchronously from the queue worker
+    thread; emitting this signal delivers the event queued on the GUI thread so
+    the JobDetail timeline can be updated safely.
     """
 
     changed = Signal(object)
@@ -177,11 +214,15 @@ class Controller:
         # worker is discarded on its `finished` signal; all are joined in `stop()`.
         self._preflight_thread: QThread | None = None
         self._mapping_thread: QThread | None = None
+        self._apply_thread: QThread | None = None
         self._workers: set[QThread] = set()
 
         self._bridge = _QueueBridge()
         self._bridge.changed.connect(self._on_queue_changed)
         self.queue.subscribe(self._notify_queue)
+
+        self._progress_bridge = _ProgressBridge()
+        self._progress_bridge.changed.connect(self._on_run_progress)
 
         self._wire_signals()
         # `closeEvent` -> controller.stop (idempotent).
@@ -230,6 +271,13 @@ class Controller:
         if self._started or self._stopped:
             return
         self._started = True
+        # A run row with a NULL status can only be left by a previous process
+        # that died mid-run; mark it `interrupted` before starting fresh so the
+        # run log never shows a perpetually running row.
+        try:
+            self._state().recover_orphan_runs()
+        except Exception:  # noqa: BLE001 - recovery must never block startup
+            logger.exception("orphan run recovery failed")
         self.queue.start()
         self._scheduler_thread = SchedulerThread(self.scheduler, interval=30)
         self._scheduler_thread.due.connect(self._on_due)
@@ -246,6 +294,7 @@ class Controller:
             self._scheduler_thread = None
         self._join_worker("_preflight_thread")
         self._join_worker("_mapping_thread")
+        self._join_worker("_apply_thread")
         self.queue.shutdown()
         with self._conns_lock:
             conns, self._conns = list(self._conns), []
@@ -272,6 +321,7 @@ class Controller:
         self._workers.clear()
         self._preflight_thread = None
         self._mapping_thread = None
+        self._apply_thread = None
 
     def _reap_worker(self, worker: _NetworkWorker) -> None:
         """Drop a finished worker from the strong-ref container (keep slot attr).
@@ -350,18 +400,37 @@ class Controller:
                 state=self.state,
                 should_stop=should_stop,
                 throttle=0.05,
+                progress=self._emit_progress,
             )
         finally:
             if client is not None:
                 self._close_client(client)
 
     def _client(self) -> STGClient:
+        """Build a client from the environment, failing fast on missing vars.
+
+        `STGClient.__init__` validates only `server`; a missing `user`/`password`
+        would surface later as a confusing HTTP 401 from the worker thread. All
+        three vars are checked here so the operator sees one actionable
+        message ("set STG_SERVER/STG_USER/STG_PASSWORD in .env") instead of a
+        traceback or a 401.
+        """
         import os
 
+        missing = [
+            var
+            for var in ("STG_SERVER", "STG_USER", "STG_PASSWORD")
+            if not (os.environ.get(var) or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                f"missing {'/'.join(missing)} — set them in .env"
+                " (copy .env.example)"
+            )
         return STGClient(
-            server=os.environ.get("STG_SERVER", ""),
-            user=os.environ.get("STG_USER", ""),
-            password=os.environ.get("STG_PASSWORD", ""),
+            server=os.environ["STG_SERVER"],
+            user=os.environ["STG_USER"],
+            password=os.environ["STG_PASSWORD"],
         )
 
     @staticmethod
@@ -379,7 +448,7 @@ class Controller:
         if match is not None and not match.store_col:
             fixed = replace(
                 job, binding=replace(job.binding, match=ColumnBinding(
-                    match.source_var, match.source_var, match.kind
+                    match.source_var, match.source_var
                 ))
             )
             return fixed
@@ -402,6 +471,8 @@ class Controller:
         w.refresh_requested.connect(self._refresh)
         w.schedules_requested.connect(self._show_schedules)
         w.run_activated.connect(self._show_run)
+        w.apply_proposals_requested.connect(self._apply_proposals)
+        w.dismiss_proposals_requested.connect(self._dismiss_proposals)
         w.back.connect(w.show_dashboard)
         # Double-clicking a dashboard row opens (and loads) the job detail.
         w.dashboard.job_activated.connect(self._open_job)
@@ -412,6 +483,30 @@ class Controller:
         """Called by `RunQueue` (possibly off-thread); hop to the GUI thread."""
         self._bridge.changed.emit(state)
 
+    def _emit_progress(self, event: dict) -> None:
+        """`run_sync` progress callback (worker thread) → queued GUI signal."""
+        self._progress_bridge.changed.emit(event)
+
+    def _on_run_progress(self, event: dict) -> None:
+        """Render one run stage in the open job's timeline (GUI thread)."""
+        if self._detail_name:
+            self.window.job_detail.set_run_progress(event)
+        # Mirror the stage into the header status so the operator sees progress
+        # even while another page (dashboard) is in front.
+        stage = event.get("stage", "")
+        if stage == "done":
+            status = event.get("status") or "?"
+            color = _STATUS_OK if status == "ok" else _STATUS_FAIL
+            self.window.set_status(f"run {status}", color)
+        elif stage == "start":
+            job = event.get("job", "")
+            dry = " (dry run)" if event.get("dry_run") else ""
+            self.window.set_status(f"running {job}{dry}", _STATUS_WARN)
+        else:
+            line = _progress_line(event).lstrip("· ").strip()
+            if line:
+                self.window.set_status(line, _STATUS_WARN)
+
     def _on_queue_changed(self, state) -> None:
         self.window.dashboard.set_queue(state.active, state.pending)
         if state.active:
@@ -420,6 +515,30 @@ class Controller:
             self.window.set_status("ready", _STATUS_OK)
         # A run just finished → refresh the open job's History/Conflicts.
         if self._active_prev is not None and state.active is None:
+            finished = self._active_prev
+            last = None
+            try:
+                runs = self.state.recent_runs(finished)
+                last = runs[0] if runs else None
+            except Exception:  # noqa: BLE001 - toast must not crash the slot
+                logger.debug("could not read finished run", exc_info=True)
+            if last:
+                status = last.get("status") or "unknown"
+                dry = bool(last.get("dry_run"))
+                counts = _fmt_counts(last.get("counts"), dry_run=dry)
+                kind = "ok" if status == "ok" else "fail"
+                msg = f'"{finished}" finished: {status}'
+                if dry:
+                    msg += " — DRY RUN (no writes)"
+                if counts:
+                    msg += f" ({counts})"
+                self.window.toast(msg, kind=kind)
+                # The progress stream already set this, but a run that produced
+                # no progress events (e.g. a crash) still needs a final status.
+                self.window.set_status(
+                    f"{finished}: {status}" + (" (dry run)" if dry else ""),
+                    _STATUS_OK if status == "ok" else _STATUS_FAIL,
+                )
             if self._detail_name:
                 self._load_history(self._detail_name)
         self._active_prev = state.active
@@ -485,6 +604,7 @@ class Controller:
         if not name:
             detail.set_history([])
             detail.set_conflicts([])
+            detail.set_proposals([])
             return
         runs = self.state.recent_runs(name)
         detail.set_history(
@@ -492,7 +612,7 @@ class Controller:
                 {
                     "time": r.get("finished_at") or r.get("started_at") or "",
                     "status": r.get("status") or "",
-                    "counts": _fmt_counts(r.get("counts")),
+                    "counts": _fmt_counts(r.get("counts"), dry_run=r.get("dry_run")),
                     "id": r.get("id"),
                 }
                 for r in runs
@@ -508,6 +628,22 @@ class Controller:
                     "side": c.get("side", ""),
                 }
                 for c in conflicts
+            ]
+        )
+        self._load_proposals(name)
+
+    def _load_proposals(self, name: str) -> None:
+        """Fill the Proposed-updates tab with this job's pending proposals."""
+        rows = self.state.pending_proposals(name)
+        self.window.job_detail.set_proposals(
+            [
+                {
+                    "id": p["id"],
+                    "match_value": p.get("match_value", ""),
+                    "id_value": p.get("id_value", ""),
+                    "diff": p.get("diff", []),
+                }
+                for p in rows
             ]
         )
 
@@ -559,7 +695,6 @@ class Controller:
             ),
             write=WriteConfig(
                 dry_run=fields["dry_run"],
-                delete_policy=fields["delete_policy"],
             ),
         )
 
@@ -567,6 +702,7 @@ class Controller:
         name = self._detail_name or ""
         if not name:
             self.window.set_status("save needs a name", _STATUS_FAIL)
+            self.window.toast("Save needs a job name", kind="fail")
             return
         detail = self.window.job_detail
         try:
@@ -574,6 +710,7 @@ class Controller:
         except ValueError:
             logger.exception("controller: invalid config for %r", name)
             self.window.set_status("config error", _STATUS_FAIL)
+            self.window.toast("Config error — check the form fields", kind="fail")
             return
         if self.save(
             name,
@@ -582,8 +719,10 @@ class Controller:
             enabled=detail.enabled_check.isChecked(),
         ):
             self.window.set_status(f"saved {name}", _STATUS_OK)
+            self.window.toast(f'"{name}" saved', kind="ok")
         else:
             self.window.set_status(f"save failed: {name}", _STATUS_FAIL)
+            self.window.toast(f'Save failed: "{name}" — see log', kind="fail")
 
     def _approve(self) -> None:
         # `JobDetail.approve()` has already checked the enabled box; persist the
@@ -597,6 +736,7 @@ class Controller:
         except ValueError:
             logger.exception("controller: invalid config for %r", name)
             self.window.set_status("config error", _STATUS_FAIL)
+            self.window.toast("Config error — check the form fields", kind="fail")
             return
         if self.save(
             name,
@@ -605,8 +745,106 @@ class Controller:
             enabled=detail.enabled_check.isChecked(),
         ):
             self.window.set_status(f"binding approved: {name}", _STATUS_OK)
+            self.window.toast(f'Binding approved: "{name}"', kind="ok")
         else:
             self.window.set_status(f"approve failed: {name}", _STATUS_FAIL)
+            self.window.toast(f'Approve failed: "{name}" — see log', kind="fail")
+
+    # -- update proposals (manual approval, spec §6) -----------------------
+
+    def _apply_proposals(self, ids: list) -> None:
+        """Apply the ticked update proposals via compare-and-swap.
+
+        Runs off the GUI thread (it re-reads the store). On success each
+        proposal is marked `applied`; a stale one is marked `stale` and
+        reported, never written.
+        """
+        name = self._detail_name
+        if not name or not ids:
+            return
+        state = self.state
+        proposals = []
+        for pid in ids:
+            p = state.get_proposal(int(pid))
+            if p is not None:
+                proposals.append(p)
+        if not proposals:
+            return
+        w = self.window
+        w.set_status(f"applying {len(proposals)} update(s)...", _STATUS_WARN)
+
+        try:
+            job = self.registry.get(name)
+        except KeyError:
+            w.set_status("config error", _STATUS_FAIL)
+            w.toast("Config error — job not found", kind="fail")
+            return
+        id_column = job.store.id_column
+
+        def work():
+            client = self._client()
+            try:
+                actions = [_action_from_proposal(p) for p in proposals]
+                res = apply_updates(
+                    client, job.store.id, actions, id_column=id_column,
+                    throttle=0.05,
+                )
+            finally:
+                self._close_client(client)
+            return res, proposals
+
+        worker = _NetworkWorker(work)
+        worker.ok.connect(self._on_apply_ok)
+        worker.failed.connect(self._on_apply_error)
+        self._start_worker("_apply_thread", worker, label="apply")
+
+    def _on_apply_ok(self, result) -> None:
+        res, proposals = result
+        state = self.state
+        applied_ids = {a.match_value for a in res.applied}
+        stale_ids = {a.match_value for a in res.stale}
+        for p in proposals:
+            mv = p["match_value"]
+            if mv in applied_ids:
+                state.set_proposal_status(p["id"], "applied")
+                state.track_row(
+                    job=p["job"],
+                    match_value=mv,
+                    row_hash=state.row_hash(p["payload"]),
+                )
+            elif mv in stale_ids:
+                state.set_proposal_status(p["id"], "stale")
+
+        w = self.window
+        n_ok, n_stale = len(res.applied), len(res.stale)
+        if res.errors and not n_ok:
+            w.set_status("apply failed", _STATUS_FAIL)
+            w.toast(f"Apply failed — {res.errors[0]}", kind="fail")
+        elif n_stale:
+            w.set_status(f"applied {n_ok}, {n_stale} stale", _STATUS_WARN)
+            w.toast(
+                f"Applied {n_ok}; {n_stale} stale (store changed since proposal)",
+                kind="warn",
+            )
+        else:
+            w.set_status(f"applied {n_ok} update(s)", _STATUS_OK)
+            w.toast(f"Applied {n_ok} update(s)", kind="ok")
+        if self._detail_name:
+            self._load_proposals(self._detail_name)
+
+    def _on_apply_error(self, exc) -> None:
+        msg = _short(exc)
+        self.window.set_status(f"apply error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Apply error: {msg}", kind="fail")
+
+    def _dismiss_proposals(self, ids: list) -> None:
+        """Mark the ticked proposals dismissed (no store write)."""
+        state = self.state
+        for pid in ids:
+            state.set_proposal_status(int(pid), "dismissed")
+        if self._detail_name:
+            self._load_proposals(self._detail_name)
+        self.window.set_status(f"dismissed {len(ids)} proposal(s)", _STATUS_OK)
 
     def _preflight(self) -> None:
         w = self.window
@@ -615,6 +853,7 @@ class Controller:
         except ValueError:
             logger.exception("controller: invalid config for preflight")
             w.set_status("config error", _STATUS_FAIL)
+            w.toast("Config error — check the form fields", kind="fail")
             return
         w.set_status("preflight...", _STATUS_WARN)
         # Client construction is pure (no I/O) → keep it on the GUI thread so a
@@ -624,6 +863,8 @@ class Controller:
         except Exception:  # noqa: BLE001 - surface any failure to operator
             logger.exception("controller: preflight client failed")
             w.set_status("preflight error", _STATUS_FAIL)
+            w.toast("Preflight error: could not build STG client (check .env)",
+                    kind="fail")
             return
 
         def work():
@@ -655,28 +896,53 @@ class Controller:
             "preflight ok" if report.ok else "preflight blocked",
             _STATUS_OK if report.ok else _STATUS_FAIL,
         )
+        if report.ok:
+            w.toast("Preflight OK — binding is ready to approve", kind="ok")
+        else:
+            reasons = "; ".join(report.errors[:2])
+            w.toast(
+                f"Preflight blocked — {reasons}" if reasons
+                else "Preflight blocked — see review table",
+                kind="fail",
+            )
 
     def _on_preflight_error(self, exc) -> None:
-        self.window.set_status("preflight error", _STATUS_FAIL)
+        msg = _short(exc)
+        self.window.set_status(f"preflight error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Preflight error: {msg}", kind="fail")
 
     # -- mapping import / export -------------------------------------------
 
-    def _mapping_pool(self, job: JobConfig) -> tuple[list[str], list[str]]:
-        from store_sync.core.fetcher import parse_survey_index
+    def _store_pool(self, job: JobConfig) -> list[str]:
+        """Fetch just the store's column names (GetStore only — fast).
 
+        Used by the import path: the survey XML (the only source of the
+        source-var list) is a 30 s+ download for large surveys, so the import
+        validates store columns only and defers source-var validation to
+        preflight, which must run anyway before any write.
+        """
         client = None
         try:
             client = self._client()
-            store_cols = sorted(
-                {k for r in client.get_store(job.store.id) for k in r}
-            )
-            source_vars = sorted(
-                parse_survey_index(client.get_survey_xml(job.source.survey_id)).keys()
-            )
+            return self._store_cols_of(client, job)
         finally:
             if client is not None:
                 self._close_client(client)
-        return store_cols, source_vars
+
+    @staticmethod
+    def _store_cols_of(client, job: JobConfig) -> list[str]:
+        """Store column names in the store's own order (first-seen key order).
+
+        JSON row objects preserve key order, so the first row's key order is
+        the store's column order; later rows only append columns the first row
+        lacked. An empty store yields [] — callers must reject that (no
+        columns to map, template would be header-only).
+        """
+        cols: dict[str, None] = {}  # dict as an insertion-ordered set
+        for r in client.get_store(job.store.id):
+            for k in r:
+                cols.setdefault(k)
+        return list(cols)
 
     def _import_mapping(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -694,8 +960,16 @@ class Controller:
         w.set_status("importing...", _STATUS_WARN)
 
         def work():
-            store_cols, source_vars = self._mapping_pool(job)
-            return parse_mapping(path, store_cols, source_vars)
+            # Fast path: GetStore only. Source vars are NOT validated here —
+            # the var list costs a full survey-XML download; preflight (the
+            # mandatory pre-write gate) validates them against a live pull.
+            store_cols = self._store_pool(job)
+            return parse_mapping(
+                path,
+                store_cols,
+                valid_source_vars=None,
+                id_column=job.store.id_column,
+            )
 
         worker = _NetworkWorker(work)
         worker.ok.connect(self._on_import_ok)
@@ -706,13 +980,26 @@ class Controller:
         w = self.window
         parsed, errors = result
         if errors:
-            w.set_status("import rejected", _STATUS_FAIL)
+            logger.warning("mapping import rejected: %s", "; ".join(errors))
+            # Surface the first reason in the status bar — a bare
+            # "import rejected" hides the fixable cause from the operator.
+            reason = errors[0]
+            if len(reason) > 80:
+                reason = reason[:77] + "..."
+            w.set_status(f"import rejected: {reason}", _STATUS_FAIL)
+            w.toast(f"Import rejected — {reason}", kind="fail")
             return
         w.job_detail.binding_model.set_columns(parsed)
         w.set_status(f"imported {len(parsed)} column(s)", _STATUS_WARN)
+        w.toast(
+            f"Imported {len(parsed)} column(s) — run preflight to validate",
+            kind="ok",
+        )
 
     def _on_import_error(self, exc) -> None:
-        self.window.set_status("import error", _STATUS_FAIL)
+        msg = _short(exc)
+        self.window.set_status(f"import error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Import error: {msg}", kind="fail")
 
     def _export_mapping(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -728,11 +1015,16 @@ class Controller:
         except ValueError:
             logger.exception("controller: invalid config for export")
             w.set_status("config error", _STATUS_FAIL)
+            w.toast("Config error — check the form fields", kind="fail")
             return
         w.set_status("exporting...", _STATUS_WARN)
 
         def work():
-            store_cols, _ = self._mapping_pool(job)
+            store_cols = self._store_pool(job)
+            if not store_cols:
+                # An empty store has no columns to map; a header-only
+                # template would silently mislead the operator.
+                raise ValueError("store has no columns (empty store?)")
             export_template(path, store_cols)
             return path
 
@@ -743,9 +1035,12 @@ class Controller:
 
     def _on_export_ok(self, path) -> None:
         self.window.set_status(f"template written: {path}", _STATUS_OK)
+        self.window.toast(f"Template written: {path}", kind="ok")
 
     def _on_export_error(self, exc) -> None:
-        self.window.set_status("export error", _STATUS_FAIL)
+        msg = _short(exc)
+        self.window.set_status(f"export error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Export error: {msg}", kind="fail")
 
 
 def main() -> int:

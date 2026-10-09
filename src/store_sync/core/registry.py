@@ -43,7 +43,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     survey_id      TEXT NOT NULL,
     match_source_var TEXT NOT NULL,
     match_store_col  TEXT NOT NULL,
-    delete_policy  TEXT NOT NULL DEFAULT 'full_history',
     dry_run        INTEGER NOT NULL DEFAULT 1,
     enabled        INTEGER NOT NULL DEFAULT 0,
     schedule_unit    TEXT NOT NULL DEFAULT '',
@@ -74,7 +73,6 @@ class JobEntry:
     survey_id: str
     match_source_var: str
     match_store_col: str
-    delete_policy: str
     dry_run: bool
     enabled: bool
     schedule: Schedule
@@ -85,7 +83,7 @@ class JobEntry:
 
 _ENTRY_FIELDS = """
 SELECT jobs.name, jobs.store_id, jobs.id_column, jobs.survey_id,
-       jobs.match_source_var, jobs.match_store_col, jobs.delete_policy,
+       jobs.match_source_var, jobs.match_store_col,
        jobs.dry_run, jobs.enabled,
        jobs.schedule_unit, jobs.schedule_every, jobs.schedule_at,
        jobs.schedule_weekday,
@@ -111,7 +109,7 @@ class Registry:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
         self._add_schedule_columns()
-        self._drop_legacy_columns(("window_days", "date_type", "schedule"))
+        self._drop_legacy_columns(("window_days", "date_type", "schedule", "delete_policy"))
         self.conn.commit()
 
     def _add_schedule_columns(self) -> None:
@@ -154,7 +152,6 @@ class Registry:
             str(job.source.survey_id),
             str(match.source_var) if match else "",
             str(match.store_col) if match else "",
-            str(job.write.delete_policy),
             int(bool(job.write.dry_run)),
         )
 
@@ -206,7 +203,6 @@ class Registry:
             survey_id=row["survey_id"],
             match_source_var=row["match_source_var"],
             match_store_col=row["match_store_col"],
-            delete_policy=row["delete_policy"],
             dry_run=bool(row["dry_run"]),
             enabled=bool(row["enabled"]),
             schedule=schedule,
@@ -245,9 +241,9 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "delete_policy, dry_run, enabled, "
+                    "dry_run, enabled, "
                     "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, int(bool(enabled)),
                      *self._schedule_values(schedule)),
                 )
@@ -270,7 +266,7 @@ class Registry:
         sets = [
             "store_id = ?", "id_column = ?", "survey_id = ?",
             "match_source_var = ?", "match_store_col = ?",
-            "delete_policy = ?", "dry_run = ?", "name = ?",
+            "dry_run = ?", "name = ?",
         ]
         # values order matches `sets`; job name for the WHERE is the last value.
         params = list(self._config_values(job)[1:])  # drop the old name slot
@@ -323,7 +319,6 @@ class Registry:
             ),
             write=WriteConfig(
                 dry_run=bool(row["dry_run"]),
-                delete_policy=row["delete_policy"],
             ),
         )
 

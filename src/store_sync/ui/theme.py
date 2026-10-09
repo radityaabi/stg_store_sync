@@ -359,6 +359,19 @@ QFrame#RunSummary {
 }
 QFrame#RunSummary QLabel { color: $display_value; font-weight: 600; }
 
+/* ==== run progress panel (live timeline; see ui/job_detail.py) ==== */
+QFrame#ConsolePanel {
+    background: $surface;
+    border: 1px solid $border_light;
+    border-top: 2px solid $primary;
+    border-radius: $radius_lg;
+}
+QLabel#ProgressLabel {
+    color: $secondary;
+    font-size: $caption_size;
+    font-weight: 600;
+}
+
 /* ==== schedule preview ============================================ */
 QLabel#SchedulePreview {
     color: $secondary;
@@ -393,6 +406,17 @@ QLabel#status_fail { background: $status_fail_bg; color: $status_fail_fg;
     border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
 QLabel#status_cancelled { background: $status_cancelled_bg; color: $status_cancelled_fg;
     border-radius: $radius_pill; padding: 2px 10px; font-size: $caption_size; font-weight: 600; }
+
+/* ==== toasts (see ui/toast.py) ==================================== */
+QLabel#ToastOk { background: $status_ok_bg; color: $status_ok_fg;
+    border: 1px solid $success; border-radius: $radius_md; padding: 8px 16px;
+    font-size: $label_size; font-weight: 600; }
+QLabel#ToastWarn { background: $status_warn_bg; color: $status_warn_fg;
+    border: 1px solid $warning; border-radius: $radius_md; padding: 8px 16px;
+    font-size: $label_size; font-weight: 600; }
+QLabel#ToastFail { background: $status_fail_bg; color: $status_fail_fg;
+    border: 1px solid $danger; border-radius: $radius_md; padding: 8px 16px;
+    font-size: $label_size; font-weight: 600; }
 
 /* ==== severity badges ============================================= */
 QLabel#sev_critical { background: $sev_critical_bg; color: $sev_critical_fg;

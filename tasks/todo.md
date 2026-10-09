@@ -67,5 +67,26 @@
 - [x] 4 UI + CLI surfaces — unit/every/at/weekday editors; labels in dashboard/overview/CLI
 - [x] 5 GUI integration + coverage — schedule tab wiring; visibility tests; 335 tests green
 
+## Phase 8 — Manual update approval + delete removal ✅ COMPLETE
+> Plan: `docs/superpowers/plans/2026-10-09-manual-update-approval.md`
+> Supersedes base spec §6 + §7.3 (delete-policy selector).
+> Automation = AddRow only. Update = proposal + operator Apply (compare-and-swap).
+> Delete = removed entirely (no policy, no option, no API call).
+
+- [x] 8.0 (prereq) Fix `test_run_missing_creds_is_1` isolation (`.env` + `load_dotenv`)
+- [x] 8.1 Spec + vocabulary delta — base spec §6/§7.3, `AGENTS.md` invariants, `CONTEXT.md`
+- [x] 8.2 `core/config.py` — drop `DeletePolicy` + `WriteConfig.delete_policy`
+- [x] 8.3 `core/planner.py` — per-column `diffs`, proposal-only update, no delete
+- [x] 8.4 `core/writer.py` — add-only `apply_plan` + CAS `apply_updates`
+- [x] 8.5 `core/state.py` — `proposals` table + methods
+- [x] 8.6 `core/sync.py` — apply adds, record proposals, no delete
+- [x] 8.7 `core/registry.py` — drop `delete_policy` column (+ migration)
+- [x] 8.8 `core/stg_client.py` — remove `delete_row`/`delete_all_rows`
+- [x] 8.9 `ui/job_detail.py` + `ui/dialogs.py` + `ui/models.py` — proposals review panel; drop delete-policy combo (both surfaces)
+- [x] 8.10 `gui.py` — wire apply/dismiss handlers; drop `delete_policy` from `_job_from_detail`
+- [x] 8.11 `cli.py` — add-only + proposal count
+- [x] 8.12 End-to-end acceptance on `DUMMY_AUTO_STORE`
+- [x] 8.13 (prereq) Fix `test_run_missing_creds_is_1` isolation (`.env` + `load_dotenv`)
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

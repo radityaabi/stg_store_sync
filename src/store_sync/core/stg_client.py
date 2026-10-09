@@ -5,15 +5,12 @@ returns parsed JSON. Retries apply to GETs that STG is known to drop mid-stream
 (`/SimpleExport`). Write semantics (Fase 0):
   - `AddRow` / `UpdateRow` send column values as query params; every column must
     be present (omitted columns are reset to their default).
-  - `DeleteRow` takes the id/tag value as a URL path segment.
-  - `DeleteRow` returns `{Done: true}` even when nothing matched — callers must
-    verify by re-reading the store.
+  - The tool never deletes: there is no `DeleteRow` here (spec §6).
 """
 from __future__ import annotations
 
 import time
 from typing import Any, Callable, Iterable, Sequence
-from urllib.parse import quote
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -224,12 +221,6 @@ class STGClient:
 
     def update_row(self, store_id: int | str, values: dict[str, Any]) -> JSON:
         return self._post(f"/SubjectStores/UpdateRow/{store_id}", values)
-
-    def delete_row(self, store_id: int | str, tag: Any) -> JSON:
-        return self._post(f"/SubjectStores/DeleteRow/{store_id}/{quote(str(tag), safe='')}")
-
-    def delete_all_rows(self, store_id: int | str) -> JSON:
-        return self._post(f"/SubjectStores/DeleteAllRows/{store_id}")
 
     # -- shape helpers -----------------------------------------------------
 

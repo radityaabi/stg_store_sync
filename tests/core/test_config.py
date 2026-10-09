@@ -7,7 +7,6 @@ import yaml
 from store_sync.core.config import (
     BindingConfig,
     ColumnBinding,
-    DeletePolicy,
     JobConfig,
     SourceConfig,
     StoreConfig,
@@ -37,7 +36,6 @@ def sample_dict():
         "write": {
             "op": "full_sync",
             "dry_run": True,
-            "delete_policy": "full_history",
         },
     }
 
@@ -57,7 +55,6 @@ class TestRoundTrip:
         assert cfg.binding.columns[0].store_col == "I7_1_2"
         assert cfg.write.op == "full_sync"
         assert cfg.write.dry_run is True
-        assert cfg.write.delete_policy == "full_history"
 
     def test_to_dict_is_stable(self):
         cfg = JobConfig.from_dict(sample_dict())
@@ -96,7 +93,6 @@ class TestDefaults:
         assert cfg.binding.mode == "mapped"
         assert cfg.write.op == "full_sync"
         assert cfg.write.dry_run is True
-        assert cfg.write.delete_policy == "full_history"
 
     def test_column_kind_defaults_to_text(self):
         col = ColumnBinding.from_dict({"source_var": "A", "store_col": "B"})
@@ -125,11 +121,12 @@ class TestValidation:
         with pytest.raises(ValueError, match="mode"):
             JobConfig.from_dict(d)
 
-    def test_bad_delete_policy(self):
+    def test_legacy_delete_policy_key_is_ignored(self):
         d = sample_dict()
-        d["write"]["delete_policy"] = "nuke"
-        with pytest.raises(ValueError, match="delete_policy"):
-            JobConfig.from_dict(d)
+        d["write"]["delete_policy"] = "nuke"  # legacy key in the wild
+        cfg = JobConfig.from_dict(d)
+        assert not hasattr(cfg.write, "delete_policy")
+        assert "delete_policy" not in cfg.to_dict()["write"]
 
     def test_bad_kind(self):
         d = sample_dict()
@@ -164,20 +161,13 @@ class TestValidation:
     def test_validation_collects_all_errors_as_list(self):
         d = sample_dict()
         d["binding"]["mode"] = "nope"
-        d["write"]["delete_policy"] = "nope"
+        d["store"]["id_column"] = ""
         errors = validate(JobConfig.from_dict(d, do_validate=False))
         assert any("mode" in e for e in errors)
-        assert any("delete_policy" in e for e in errors)
+        assert any("id_column" in e for e in errors)
 
 
 class TestEnums:
-    def test_delete_policy_values(self):
-        assert {p.value for p in DeletePolicy} == {
-            "full_history",
-            "tracked_only",
-            "manual",
-        }
-
     def test_enums_construct_from_string(self):
         assert StoreConfig(id=1, id_column="No").id_column == "No"
         assert SourceConfig(survey_id="s").survey_id == "s"

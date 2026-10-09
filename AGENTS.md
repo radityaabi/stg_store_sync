@@ -7,7 +7,7 @@ must know to change the code without breaking it. Vocabulary lives in
 ## What this is
 
 Standalone Python 3.12 + PySide6 desktop tool. It pulls SurveyToGo (STG / Dooblo)
-interview data for a **source survey** and full-syncs selected columns into an
+interview data for a **source survey** and syncs selected columns into an
 STG **Subject Store** (External List) via the STG REST API. **Dry-run is the
 default.**
 
@@ -68,16 +68,26 @@ Violating any of these corrupts production data or the safety model:
    the existing store row and overlays mapped columns.
 2. **Empty source value = `""`, always written — never skipped.** A configured
    var absent from the export is empty, not "leave untouched".
-3. **`DeleteRow` always returns `{Done: true}`.** Re-read the store to confirm a
-   delete; never trust the response.
-4. **The id/tag column is user-declared, never guessed**, and is verified in
+3. **Automation writes ADD only.** An `update` is a **proposal** recorded for
+   operator review; it is never written by a run. Delete does not exist — the
+   tool never calls `DeleteRow`, and store rows absent from a pull are left
+   untouched (a short/failed pull must never imply deletion).
+4. **Update application is compare-and-swap.** `writer.apply_updates` re-reads
+   the store and writes a proposal only when every diffed column still equals its
+   recorded `old` value; a mismatch is `stale` and skipped. The written payload
+   is the current store row overlaid with the new values.
+5. **A proposal exists only for a genuine byte-for-byte diff.** Identical rows
+   are `same` — no proposal, ever.
+6. **The id/tag column is user-declared, never guessed**, and is verified in
    preflight (exists → unique → no-op probe). A wrong declaration answers
    `500 id column data not found`.
-5. **Fail closed:** a store-side duplicate match key **halts** the job; a
+7. **Fail closed:** a store-side duplicate match key **halts** the job; a
    source-side duplicate **skips** those rows (run → `partial`). Never guess.
-6. **Dry-run is the default.** A live write is an explicit operator choice.
-7. **The id value is immutable on update**; adds assign `max(id_column)+1`.
-8. **One global run queue** — exactly one sync at a time; never run two.
+8. **Dry-run is the default.** A live write is an explicit operator choice.
+9. **The id value is immutable on update**; adds assign `max(id_column)+1`.
+10. **One global run queue** — exactly one sync at a time; never run two.
+11. **Headless = add-only.** CLI/scheduler runs write adds and record proposals;
+    they never apply updates.
 
 ## Docs — source of truth
 
@@ -119,7 +129,7 @@ Violating any of these corrupts production data or the safety model:
 - The `SimpleExport` `variableNames` filter takes the **question-level base
   name** (`QPM1`), not the answer-level var (`T_QPM1_1`); it is an optimisation —
   verify the response and fall back to a full export if a needed var is missing.
-- Pulling a short window makes "absent from the pull" ≠ "should be deleted"; the
-  `full_history` delete policy requires a full-population window.
+- Pulling a short window makes "absent from the pull" ≠ "should be deleted";
+  absent rows are never touched (there is no delete).
 - Value comparison is byte-for-byte; `""` and `" "` are distinct. Normalisation
   is opt-in per column, never silent.

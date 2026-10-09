@@ -6,6 +6,7 @@ import types
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest  # noqa: E402
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -193,7 +194,7 @@ def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
     entry = JobEntry(
         name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
-        delete_policy="full_history", dry_run=True,
+        dry_run=True,
         enabled=False, schedule=Schedule(""), column_count=1, last_status=None,
         last_finished_at=None,
     )
@@ -201,6 +202,64 @@ def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
     c._preflight()  # must not raise; client construction fails before any request
     assert "error" in w.status_label.text().lower()
     assert "#f87171" in w.status_label.styleSheet()
+    c.stop()
+    w.close()
+
+
+def test_client_missing_env_names_the_vars(tmp_path, monkeypatch):
+    """`_client()` must say WHICH vars are missing and point at `.env`."""
+    for var in ("STG_SERVER", "STG_USER", "STG_PASSWORD"):
+        monkeypatch.delenv(var, raising=False)
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    with pytest.raises(ValueError, match=r"STG_SERVER.*STG_USER.*STG_PASSWORD.*\.env"):
+        c._client()
+    c.stop()
+    w.close()
+
+
+def test_client_partial_env_names_only_missing(tmp_path, monkeypatch):
+    """Only the missing vars are named; present ones are not required again."""
+    monkeypatch.setenv("STG_SERVER", "https://stg.example")
+    monkeypatch.delenv("STG_USER", raising=False)
+    monkeypatch.delenv("STG_PASSWORD", raising=False)
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    with pytest.raises(ValueError, match="STG_USER/STG_PASSWORD"):
+        c._client()
+    msg = None
+    try:
+        c._client()
+    except ValueError as exc:
+        msg = str(exc)
+    assert "STG_SERVER" not in msg  # set → not listed
+    c.stop()
+    w.close()
+
+
+def test_export_missing_env_surfaces_actionable_error(tmp_path, monkeypatch):
+    """Export with no .env must toast the missing-vars message, not a traceback."""
+    for var in ("STG_SERVER", "STG_USER", "STG_PASSWORD"):
+        monkeypatch.delenv(var, raising=False)
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    w.show()  # toasts are child overlays → visible only with the window up
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        staticmethod(lambda *a, **k: ("m.xlsx", "")),
+    )
+
+    c._export_mapping()
+    _drain(c, "_mapping_thread")
+    from store_sync.ui.toast import Toast
+
+    toasts = [t for t in w.findChildren(Toast) if t.isVisible()]
+    assert toasts, "expected a failure toast"
+    assert "STG_SERVER" in toasts[0].text()
+    assert ".env" in toasts[0].text()
+    assert "error" in w.status_label.text().lower()
     c.stop()
     w.close()
 
@@ -235,13 +294,78 @@ def c_state_get(path, run_id):
 
 # -- Important 1: history / conflicts / run detail --------------------------
 
-def _seed_run(c, *, job="a", status="ok", counts=None, conflict=None):
+def _seed_run(c, *, job="a", status="ok", counts=None, conflict=None, dry_run=True):
     """Record one finished run (+ optional conflict) via the controller's State."""
-    run_id = c.state.start_run(job=job, dry_run=True)
+    run_id = c.state.start_run(job=job, dry_run=dry_run)
     if conflict is not None:
         c.state.record_conflict(run_id, match_value=conflict[0], reason=conflict[1])
     c.state.finish_run(run_id, status=status, counts=counts or {"add": 1})
     return run_id
+
+
+def test_history_marks_dry_run_runs(tmp_path):
+    """A dry run's counts must read '(dry run)' — never look like real writes."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    _seed_run(c, dry_run=True, counts={"add": 296, "delete": 1})
+    _seed_run(c, dry_run=False, counts={"add": 2})
+    c._open_job("a")
+    rows = w.job_detail.history_model._rows
+    assert "(dry run)" in rows[1]["counts"]   # newest first: live run is [0]
+    assert "(dry run)" not in rows[0]["counts"]
+    c.stop()
+    w.close()
+
+
+def test_finished_run_toast_flags_dry_run(tmp_path):
+    """The 'finished' toast must say dry run so counts aren't mistaken for writes."""
+    from store_sync.ui.toast import Toast
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    _seed_run(c, dry_run=True, counts={"add": 296, "delete": 1})
+    w.show()  # child-overlay toasts need a visible window
+    c._active_prev = "a"  # pretend a run was in flight
+    from store_sync.core.run_queue import QueueState
+
+    c._on_queue_changed(QueueState(active=None, pending=[]))
+    toasts = [t for t in w.findChildren(Toast) if t.isVisible()]
+    assert toasts, "expected a finished toast"
+    assert "dry run" in toasts[0].text().lower()
+    c.stop()
+    w.close()
+
+
+def test_run_progress_reaches_job_detail(tmp_path):
+    """`run_sync` progress events must drive the JobDetail timeline panel."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c._open_job("a")
+    assert w.job_detail.progress_panel.isHidden()
+    c._on_run_progress({"stage": "start", "job": "a", "dry_run": True})
+    c._on_run_progress({"stage": "ids", "total": 296})
+    QCoreApplication.processEvents()
+    assert not w.job_detail.progress_panel.isHidden()
+    assert "296" in w.job_detail.progress_text.toPlainText()
+    c.stop()
+    w.close()
+
+
+def test_run_progress_updates_header_status(tmp_path):
+    """The header status line must show the current stage (visible off-page)."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c._on_run_progress({"stage": "pull", "total": 296})
+    assert "296" in w.status_label.text()
+    assert "#fbbf24" in w.status_label.styleSheet()  # warn while running
+    c._on_run_progress({"stage": "done", "status": "ok", "counts": {}})
+    assert "ok" in w.status_label.text().lower()
+    c.stop()
+    w.close()
 
 
 def test_open_job_fills_history_and_conflicts(tmp_path):
@@ -391,7 +515,7 @@ def _preflight_entry():
     return JobEntry(
         name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
-        delete_policy="full_history", dry_run=True,
+        dry_run=True,
         enabled=False, schedule=Schedule(""), column_count=1, last_status=None,
         last_finished_at=None,
     )
@@ -536,6 +660,156 @@ def test_mapping_export_off_thread(tmp_path, monkeypatch):
     w.close()
 
 
+def test_import_and_export_never_pull_survey_xml(tmp_path, monkeypatch):
+    """The fast mapping paths must not download the (huge) survey XML.
+
+    The var list only exists in the survey XML (30 s+ for large surveys);
+    import defers source-var validation to preflight and export never needed
+    it, so neither may call `get_survey_xml`.
+    """
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    rows = [{"No": 1, "SbjNum": "9"}]
+    calls: list = []
+
+    class Client(_OrderedClient):
+        def get_store(self, store_id):
+            calls.append("get_store")
+            return rows
+
+        def get_survey_xml(self, survey_id):
+            calls.append("get_survey_xml")  # must never happen
+            return "<Survey/>"
+
+    monkeypatch.setattr(c, "_client", lambda: Client(rows))
+    xlsx = str(tmp_path / "m.xlsx")
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        staticmethod(lambda *a, **k: (xlsx, "")),
+    )
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getOpenFileName",
+        staticmethod(lambda *a, **k: (xlsx, "")),
+    )
+
+    # Export (writes the file), fill its source vars in, then import.
+    c._export_mapping()
+    _drain(c, "_mapping_thread")
+    assert (tmp_path / "m.xlsx").exists()
+    from openpyxl import load_workbook
+
+    wb = load_workbook(xlsx)
+    ws = wb.active
+    ws["B2"] = "T_QPM1_1"  # No ← T_QPM1_1
+    ws["B3"] = "SbjNum"    # SbjNum ← SbjNum
+    wb.save(xlsx)
+
+    c._import_mapping()
+    _drain(c, "_mapping_thread")
+
+    assert "get_survey_xml" not in calls
+    assert calls.count("get_store") == 2  # once per path
+    # Import loaded the filled template into the binding grid.
+    assert w.job_detail.binding_model.rowCount() == 2
+    c.stop()
+    w.close()
+
+
+def test_export_error_surfaces_reason_not_generic(tmp_path, monkeypatch):
+    """A worker failure must show the cause (e.g. "server is required").
+
+    Regression: with no .env the export worker died on
+    ValueError("server is required") and the operator saw only a generic
+    "export error" (or a stuck "exporting...") with no actionable reason.
+    """
+    for var in ("STG_SERVER", "STG_USER", "STG_PASSWORD"):
+        monkeypatch.delenv(var, raising=False)
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        staticmethod(lambda *a, **k: ("m.xlsx", "")),
+    )
+
+    c._export_mapping()
+    _drain(c, "_mapping_thread")
+
+    status = w.status_label.text().lower()
+    assert "export error" in status
+    assert "stg_server" in status  # the actionable reason, not a bare label
+    assert "exporting" not in status  # not stuck on the transient state
+    c.stop()
+    w.close()
+
+
+class _OrderedClient:
+    """Fake client whose store rows use non-alphabetical key order."""
+
+    def __init__(self, rows):
+        self.session = types.SimpleNamespace(close=lambda: None)
+        self._rows = rows
+
+    def get_store(self, store_id):
+        return self._rows
+
+    def get_survey_xml(self, survey_id):
+        return "<Survey/>"
+
+
+def test_store_pool_keeps_store_column_order(tmp_path, monkeypatch):
+    """Column order must follow the store's own row order, not alphabetical."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    rows = [
+        {"Zebra": 1, "Alpha": 2, "mid": 3},
+        {"Beta": 4},  # extra column the first row lacked → appended last
+    ]
+    monkeypatch.setattr(c, "_client", lambda: _OrderedClient(rows))
+
+    store_cols = c._store_pool(a_job())
+    assert store_cols == ["Zebra", "Alpha", "mid", "Beta"]
+    c.stop()
+    w.close()
+
+
+def test_mapping_export_empty_store_reports_error(tmp_path, monkeypatch):
+    """An empty store must fail the export loudly, not write a header-only file."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    monkeypatch.setattr(c, "_client", lambda: _OrderedClient([]))
+    written: list = []
+    monkeypatch.setattr(
+        "store_sync.gui.export_template",
+        lambda path, store_cols: written.append((path, list(store_cols))),
+    )
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QFileDialog.getSaveFileName",
+        staticmethod(lambda *a, **k: ("m.xlsx", "")),
+    )
+
+    c._export_mapping()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and (
+        c._mapping_thread is not None and c._mapping_thread.isRunning()
+    ):
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+    QCoreApplication.processEvents()
+    assert written == []  # no template written for an empty store
+    assert "error" in w.status_label.text().lower()
+    assert "#f87171" in w.status_label.styleSheet()
+    c.stop()
+    w.close()
+
+
 # -- Important 4 (round 2): worker ownership / re-entrancy / GUI delivery ----
 
 def _arm_preflight(c, w, monkeypatch, release, calls):
@@ -658,5 +932,119 @@ def test_preflight_result_delivered_on_gui_thread(tmp_path, monkeypatch):
 
     assert seen.get("ident") == main_ident  # delivered on the GUI thread
     assert "preflight ok" in w.status_label.text().lower()
+    c.stop()
+    w.close()
+
+
+# -- update proposals: apply / dismiss (spec §6) ----------------------------
+
+class _ProposalClient:
+    """Fake client whose store rows back the CAS update apply."""
+
+    def __init__(self, rows):
+        self.session = types.SimpleNamespace(close=lambda: None)
+        self.rows = list(rows)
+        self.calls: list = []
+
+    def get_store(self, store_id):
+        return list(self.rows)
+
+    def update_row(self, store_id, values):
+        self.calls.append(("update_row", store_id, values))
+        self.rows = [
+            values if str(r.get("No")) == str(values.get("No")) else r
+            for r in self.rows
+        ]
+        return {"Done": True}
+
+
+def _seed_proposal(c, *, job="a", match="102", id_value=2, old="Bob", new="BOB"):
+    rid = c.state.start_run(job=job, dry_run=False)
+    return c.state.record_proposal(
+        rid,
+        job=job,
+        match_value=match,
+        id_value=id_value,
+        payload={"No": id_value, "SbjNum": match, "I7_1_2": new},
+        diff=[{"col": "I7_1_2", "old": old, "new": new}],
+    )
+
+
+def test_load_proposals_fills_tab(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    _seed_proposal(c)
+    c._open_job("a")
+    assert w.job_detail.proposals_model.rowCount() == 1
+    c.stop()
+    w.close()
+
+
+def test_apply_proposals_writes_and_marks_applied(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    pid = _seed_proposal(c)
+    c._detail_name = "a"
+    c._open_job("a")
+
+    client = _ProposalClient([{"No": 2, "SbjNum": "102", "I7_1_2": "Bob"}])
+    monkeypatch.setattr(c, "_client", lambda: client)
+
+    c._apply_proposals([pid])
+    _drain(c, "_apply_thread")
+
+    assert len(client.calls) == 1
+    assert client.calls[0][2]["I7_1_2"] == "BOB"
+    assert c.state.get_proposal(pid)["status"] == "applied"
+    assert w.job_detail.proposals_model.rowCount() == 0  # no longer pending
+    c.stop()
+    w.close()
+
+
+def test_apply_stale_proposal_skips_write(tmp_path, monkeypatch):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    pid = _seed_proposal(c, old="Bob")
+    c._detail_name = "a"
+    c._open_job("a")
+
+    # store cell manually changed → the recorded `old` no longer matches
+    client = _ProposalClient([{"No": 2, "SbjNum": "102", "I7_1_2": "manual"}])
+    monkeypatch.setattr(c, "_client", lambda: client)
+
+    c._apply_proposals([pid])
+    _drain(c, "_apply_thread")
+
+    assert client.calls == []  # never wrote
+    assert c.state.get_proposal(pid)["status"] == "stale"
+    c.stop()
+    w.close()
+
+
+def test_dismiss_proposals_marks_dismissed_without_write(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    pid = _seed_proposal(c)
+    c._detail_name = "a"
+    c._open_job("a")
+
+    c._dismiss_proposals([pid])
+    assert c.state.get_proposal(pid)["status"] == "dismissed"
+    assert w.job_detail.proposals_model.rowCount() == 0
+    c.stop()
+    w.close()
+
+
+def test_job_from_detail_has_no_delete_policy(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._detail_name = "a"
+    w.job_detail.load(_preflight_entry(), a_job())
+    job = c._job_from_detail()
+    assert not hasattr(job.write, "delete_policy")
     c.stop()
     w.close()
