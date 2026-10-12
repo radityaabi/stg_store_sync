@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS proposals (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     decided_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS blacklist (
+    job         TEXT NOT NULL,
+    match_value TEXT NOT NULL,
+    reason      TEXT NOT NULL DEFAULT 'deleted',
+    added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job, match_value)
+);
 """
 
 
@@ -229,3 +236,56 @@ class State:
             "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
         ).fetchone()
         return self._proposal_row(row) if row else None
+
+    # -- blacklist ---------------------------------------------------------
+
+    def blacklist_key(self, job: str, match_value, *, reason: str = "manual") -> None:
+        self.conn.execute(
+            "INSERT INTO blacklist (job, match_value, reason, added_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(job, match_value) DO UPDATE SET "
+            "reason = excluded.reason, added_at = excluded.added_at",
+            (job, str(match_value), reason),
+        )
+        self.conn.commit()
+
+    def unblacklist_key(self, job: str, match_value) -> None:
+        self.conn.execute(
+            "DELETE FROM blacklist WHERE job = ? AND match_value = ?",
+            (job, str(match_value)),
+        )
+        self.conn.commit()
+
+    def blacklisted_keys(self, job: str) -> set[str]:
+        rows = self.conn.execute(
+            "SELECT match_value FROM blacklist WHERE job = ?", (job,)
+        ).fetchall()
+        return {r["match_value"] for r in rows}
+
+    def list_blacklist(self, job: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT match_value, reason, added_at FROM blacklist "
+            "WHERE job = ? ORDER BY match_value",
+            (job,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def reconcile_blacklist(
+        self, job: str, store_keys: set[str]
+    ) -> tuple[set[str], set[str]]:
+        """Auto-blacklist tracked keys gone from the store; auto-clear reappeared.
+
+        `added = tracked - store_keys` (a key the system wrote, now deleted by
+        hand); `removed = blacklisted & store_keys` (a suppressed key re-added by
+        hand). The two sets are disjoint, so write order is irrelevant.
+        """
+        store_keys = {str(k) for k in store_keys}
+        tracked = self.tracked_keys(job)
+        blacklisted = self.blacklisted_keys(job)
+        added = tracked - store_keys
+        removed = blacklisted & store_keys
+        for key in added:
+            self.blacklist_key(job, key, reason="deleted")
+        for key in removed:
+            self.unblacklist_key(job, key)
+        return added, removed

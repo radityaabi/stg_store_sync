@@ -130,3 +130,41 @@ class TestProposals:
         rid = st.start_run(job="j", dry_run=False)
         self._record(st, run_id=rid)
         assert len(st.proposals_for_run(rid)) == 1
+
+
+class TestBlacklist:
+    def test_add_list_and_remove(self, st):
+        st.blacklist_key("j", "104", reason="deleted")
+        st.blacklist_key("j", "105")  # manual default
+        rows = st.list_blacklist("j")
+        assert [r["match_value"] for r in rows] == ["104", "105"]
+        assert rows[0]["reason"] == "deleted"
+        assert rows[1]["reason"] == "manual"
+        assert st.blacklisted_keys("j") == {"104", "105"}
+        st.unblacklist_key("j", "104")
+        assert st.blacklisted_keys("j") == {"105"}
+
+    def test_blacklist_is_per_job(self, st):
+        st.blacklist_key("a", "1")
+        assert st.blacklisted_keys("b") == set()
+
+    def test_reconcile_blacklists_tracked_key_missing_from_store(self, st):
+        st.track_row(job="j", match_value="104", row_hash="h")
+        added, removed = st.reconcile_blacklist("j", {"101", "102"})
+        assert added == {"104"}
+        assert removed == set()
+        assert st.blacklisted_keys("j") == {"104"}
+        assert st.list_blacklist("j")[0]["reason"] == "deleted"
+
+    def test_reconcile_clears_blacklisted_key_back_in_store(self, st):
+        st.blacklist_key("j", "104", reason="deleted")
+        added, removed = st.reconcile_blacklist("j", {"101", "104"})
+        assert added == set()
+        assert removed == {"104"}
+        assert st.blacklisted_keys("j") == set()
+
+    def test_reconcile_leaves_untracked_key_alone(self, st):
+        # 103 was never tracked (never written by the system) → not blacklisted.
+        added, removed = st.reconcile_blacklist("j", {"101", "102"})
+        assert added == set()
+        assert st.blacklisted_keys("j") == set()
