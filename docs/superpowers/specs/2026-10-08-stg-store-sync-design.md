@@ -384,6 +384,12 @@ written by the run. A changed row is **not** written automatically:
   option, and has no delete policy. Store rows absent from a pull are left
   untouched (a short/failed pull must never imply deletion).
 
+> **Suppression list (2026-10-12):** a store row the operator deletes by hand is
+> not re-added — see
+> `docs/superpowers/specs/2026-10-12-blacklist-deleted-rows-design.md`. The
+> per-job blacklist suppresses the `add` of a previously-tracked key that has
+> disappeared from the store.
+
 Pending proposals are persisted in the state DB (`proposals` table) so headless/
 scheduled runs surface the same review queue in the GUI. `dry_run: true` is the
 **default**; no write happens until the operator confirms (a dry run records no

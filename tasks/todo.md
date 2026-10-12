@@ -104,5 +104,18 @@
 - [x] 9.7 `gui.py` + `ui/main_window.py` — pairing worker, wiring, carry pairing on save
 - [x] 9.8 Docs (invariants, vocabulary, README, ledger) + full acceptance
 
+## Phase 10 — Blacklist (deleted rows stay deleted) ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-12-blacklist-deleted-rows-design.md`
+> Plan: `docs/superpowers/plans/2026-10-12-blacklist-deleted-rows.md`
+> A hand-deleted store row is suppressed from re-add; auto-detected from
+> `tracked`, per job, correctable in the GUI tab and the CLI.
+
+- [x] 10.1 `core/state.py` — `blacklist` table + `reconcile_blacklist`
+- [x] 10.2 `core/planner.py` — `Plan.suppressed` + `blacklisted` param
+- [x] 10.3 `core/sync.py` — reconcile before plan; `SyncResult.suppressed`
+- [x] 10.4 `ui/job_detail.py` + `ui/main_window.py` + `gui.py` — Blacklist tab
+- [x] 10.5 `cli.py` — `blacklist` / `blacklist-add` / `blacklist-remove`
+- [x] 10.6 Docs — vocabulary, invariant 13, base-spec note
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

@@ -135,6 +135,13 @@ Withholding a record from writes and reporting it, because its identity could
 not be resolved safely.
 _Avoid_: skip, drop.
 
+**Blacklist** (suppression list):
+The per-job set of match keys that must not be re-added. A key enters it
+automatically when a previously-written key disappears from the store (deleted
+by hand), and is cleared automatically when the key reappears in the store. The
+operator can also add or remove a key by hand. Suppresses `add` only.
+_Avoid_: ignore list, skip list, delete policy.
+
 **Tracking**:
 The record of which match keys this system has written (and a content hash per
 row), enabling idempotency and proposal bookkeeping.

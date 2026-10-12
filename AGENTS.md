@@ -92,6 +92,11 @@ Violating any of these corrupts production data or the safety model:
     during a run.** A job with no pairing — empty `survey_index`,
     `paired_survey_id != survey_id`, or any empty `pull_term` — is `blocked`
     before any write; there is no implicit XML fetch and no full-export fallback.
+13. **Deleted rows are blacklisted, not re-added.** A match key this system has
+    written (`tracked`) that is absent from the store was deleted by hand; the
+    next run suppresses its `add` and records it in the per-job `blacklist`
+    (state DB). A blacklisted key back in the store is auto-cleared. Suppression
+    applies to `add` only, is never an error, and is recorded on dry-run too.
 
 ## Docs — source of truth
 
