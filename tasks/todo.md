@@ -117,5 +117,19 @@
 - [x] 10.5 `cli.py` — `blacklist` / `blacklist-add` / `blacklist-remove`
 - [x] 10.6 Docs — vocabulary, invariant 13, base-spec note
 
+## Phase 11 — OS-level scheduler ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-12-os-scheduler-design.md`
+> Plan: `docs/superpowers/plans/2026-10-12-os-scheduler.md`
+> Jobs run on their per-job schedule with the GUI closed, via one OS task per
+> job (Windows `schtasks` / Linux `crontab`) that wakes `run-due --job`.
+
+- [x] 11.1 `core/state.py` — `os_fired` minute marker
+- [x] 11.2 `core/os_scheduler.py` — `plan` schedule→trigger
+- [x] 11.3 `core/os_scheduler.py` — schtasks/crontab backends + add/remove/status/sync
+- [x] 11.4 `cli.py` — `run-due` + CWD-independent `.env`
+- [x] 11.5 `cli.py` — `schedule list/add/remove/sync`
+- [x] 11.6 GUI — OS badge, Sync action, best-effort auto-sync
+- [x] 11.7 Docs — invariant 14, vocabulary, ledger, README
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

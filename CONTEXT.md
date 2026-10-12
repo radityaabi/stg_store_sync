@@ -142,6 +142,17 @@ by hand), and is cleared automatically when the key reappears in the store. The
 operator can also add or remove a key by hand. Suppresses `add` only.
 _Avoid_: ignore list, skip list, delete policy.
 
+**OS schedule** (OS task):
+The per-job entry in Windows Task Scheduler or Linux crontab that wakes
+`run-due --job <name>` often enough for `is_due()` to evaluate. It is a coarse
+wake-up, never the schedule itself.
+_Avoid_: cron job (that is the OS artifact, not the schedule).
+
+**Trigger**:
+The coarse OS-level schedule (`Trigger`) derived from a job's `Schedule` by
+`os_scheduler.plan`; `None` for a manual-only or malformed schedule.
+_Avoid_: schedule, interval.
+
 **Tracking**:
 The record of which match keys this system has written (and a content hash per
 row), enabling idempotency and proposal bookkeeping.

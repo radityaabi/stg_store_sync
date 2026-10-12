@@ -66,3 +66,20 @@ The target store may be used by a **LIVE** survey. Writes change production
 data. Dry-run is the default. Updates are never automatic — a run only proposes
 them, and the operator applies each under compare-and-swap; the tool never
 deletes.
+
+## Automation without the GUI
+
+The in-app scheduler runs only while the app is open. To run jobs on their
+schedule with the app closed, register one OS task per job:
+
+```bash
+stg-store-sync-cli schedule sync        # reconcile all jobs (run once after install)
+stg-store-sync-cli schedule list        # show each job's OS status
+stg-store-sync-cli schedule add <name>  # register one job
+stg-store-sync-cli schedule remove <name>
+```
+
+Each task runs `stg-store-sync-cli run-due --job <name>`; `run-due` decides
+whether the job is actually due (the OS trigger is a coarse wake-up) and runs
+it add-only, honouring the job's configured dry-run. Credentials come from the
+project-root `.env` (resolved independently of the working directory).

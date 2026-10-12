@@ -99,6 +99,14 @@ Violating any of these corrupts production data or the safety model:
     store snapshot is *unknown*, not a mass deletion. Suppression applies to
     `add` only, is never an error, and is recorded on dry-run too.
 
+14. **OS-level scheduling only wakes the run; `is_due` is the schedule.**
+    One OS task per enabled, scheduled job (`schedule sync`) runs
+    `stg-store-sync-cli run-due --job <name>`. The OS trigger is coarse; the
+    precise decision is always `Scheduler.tick()` / `is_due()`. `run-due` is
+    add-only and passes `dry_run=None` (each job's configured dry-run applies).
+    A per-minute `os_fired` marker stops a GUI fire and an OS fire in the same
+    minute from running twice.
+
 ## Docs — source of truth
 
 - Spec: `docs/superpowers/specs/2026-10-08-stg-store-sync-design.md`
