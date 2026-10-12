@@ -161,7 +161,7 @@ def apply_updates(
         payload[id_column] = action.id_value
         try:
             _retry(
-                client.update_row, store_id, payload,
+                client.update_row, store_id, _prune_empty(payload, id_column),
                 max_retries=max_retries, backoff=backoff,
             )
         except _WRITE_RETRYABLE as e:
@@ -175,11 +175,29 @@ def apply_updates(
     return res
 
 
+def _prune_empty(payload: dict, id_column: str | None) -> dict:
+    """Drop `""` values from a wire payload, always keeping the id column.
+
+    STG rejects `""` for numeric columns (`500 Error parsing value ... of type
+    efyNumber`) and applies the **per-type default** to any column omitted from
+    the request: `""` for text, `0` for numeric (probe F8 + live probe on store
+    17638). Sending every column with `""` therefore crashes on the first
+    numeric column. Omitting empties is type-agnostic — STG owns the type, we
+    never guess it. The id column is never dropped: a row without its tag is
+    unreachable.
+    """
+    return {
+        k: v
+        for k, v in payload.items()
+        if k == id_column or v != ""
+    }
+
+
 def _full_payload(action, id_column: str | None) -> dict:
     payload = dict(action.payload)
     if id_column is not None:
         payload[id_column] = action.id_value
-    return payload
+    return _prune_empty(payload, id_column)
 
 
 def _retry(fn, *args, max_retries, backoff):

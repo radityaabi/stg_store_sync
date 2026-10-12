@@ -72,11 +72,13 @@ class TestDryRun:
 
 
 class TestApplyAddsOnly:
-    def test_add_uses_add_row_with_full_payload(self):
+    def test_add_uses_add_row_with_payload(self):
         c = FakeClient()
         p = plan_with(Action("add", "1", "No", 5, {"No": 5, "SbjNum": "1", "X": ""}))
         res = apply_plan(c, 17620, p, dry_run=False)
-        assert c.calls[0] == ("add_row", 17620, {"No": 5, "SbjNum": "1", "X": ""})
+        # `X=""` is dropped: STG rejects "" for numeric columns and applies the
+        # per-type default for an omitted column (see TestEmptyValueOmission).
+        assert c.calls[0] == ("add_row", 17620, {"No": 5, "SbjNum": "1"})
         assert res.counts["add"] == 1
 
     def test_update_actions_are_not_applied(self):
@@ -95,6 +97,44 @@ class TestApplyAddsOnly:
         res = apply_plan(c, 17620, p, dry_run=False)
         assert c.calls == []
         assert res.counts.get("same", 0) == 0
+
+
+class TestEmptyValueOmission:
+    """`""` values are omitted from the wire payload.
+
+    STG rejects `""` for numeric columns (`500 ... of type efyNumber`) and
+    applies the per-type default for any column left out of the request: `""`
+    for text, `0` for numeric. Sending every column with `""` therefore crashed
+    on the first numeric column; omitting empties is the type-agnostic fix.
+    """
+
+    def test_add_omits_empty_values(self):
+        c = FakeClient()
+        p = plan_with(Action("add", "1", "No", 5, {"No": 5, "SbjNum": "1", "A": "", "B": "x"}))
+        apply_plan(c, 17620, p, dry_run=False)
+        assert c.calls[0] == ("add_row", 17620, {"No": 5, "SbjNum": "1", "B": "x"})
+
+    def test_add_keeps_id_even_if_blank(self):
+        # The id column must never be dropped, even when blank — a row without
+        # its tag is unreachable by id/DeleteRow.
+        c = FakeClient()
+        p = plan_with(Action("add", "1", "No", 5, {"No": 5, "SbjNum": "", "A": ""}))
+        apply_plan(c, 17620, p, dry_run=False)
+        assert c.calls[0][2] == {"No": 5}
+
+    def test_update_omits_empty_values(self):
+        c = FakeClient(store_after=[{"No": 2, "SbjNum": "2", "Q32": "22", "Empty": ""}])
+        res = apply_updates(c, 17620, [upd("2", 2, "22", "")], id_column="No")
+        assert res.counts["update"] == 1
+        sent = c.calls[0][2]
+        assert "Q32" not in sent       # cleared value omitted
+        assert "Empty" not in sent     # blank store column omitted
+        assert sent["No"] == 2
+
+    def test_update_keeps_id_even_if_blank(self):
+        c = FakeClient(store_after=[{"No": 2, "SbjNum": "2", "Q32": "22"}])
+        res = apply_updates(c, 17620, [upd("2", 2, "22", "")], id_column="No")
+        assert c.calls[0][2]["No"] == 2
 
 
 class TestRetry:
