@@ -259,3 +259,48 @@ class TestLocks:
                 holder.acquire(timeout=0.1)
         finally:
             lock.release()
+
+
+class TestBlacklist:
+    def test_blacklist_add_list_remove(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        add_job(db, "a")
+
+        assert main(["blacklist-add", "a", "104"]) == 0
+        capsys.readouterr()
+
+        assert main(["blacklist", "a"]) == 0
+        out = capsys.readouterr().out
+        assert "104" in out and "manual" in out
+
+        assert main(["blacklist-remove", "a", "104"]) == 0
+        capsys.readouterr()
+        assert main(["blacklist", "a"]) == 0
+        assert "104" not in capsys.readouterr().out
+
+    def test_blacklist_unknown_job_exits_3(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        assert main(["blacklist", "nope"]) == 3
+
+    def test_blacklist_add_unknown_job_exits_3(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        assert main(["blacklist-add", "nope", "1"]) == 3
+
+    def test_run_json_includes_suppressed(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+
+        res = _result("ok")
+        res.suppressed = 2
+        monkeypatch.setattr(cli, "run_sync", lambda job, **kw: res)
+        assert main(["run", "a", "--json"]) == 0
+        import json
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["suppressed"] == 2

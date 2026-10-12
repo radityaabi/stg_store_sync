@@ -84,6 +84,17 @@ def build_parser() -> argparse.ArgumentParser:
     stop = sub.add_parser("stop", help="request a running job stop (in-app only)")
     stop.add_argument("name", help="registered job name")
 
+    bl = sub.add_parser("blacklist", help="list a job's suppressed keys")
+    bl.add_argument("name", help="registered job name")
+
+    bla = sub.add_parser("blacklist-add", help="suppress a key for a job")
+    bla.add_argument("name", help="registered job name")
+    bla.add_argument("key", help="match-key value to suppress")
+
+    blr = sub.add_parser("blacklist-remove", help="unsuppress a key for a job")
+    blr.add_argument("name", help="registered job name")
+    blr.add_argument("key", help="match-key value to unsuppress")
+
     return p
 
 
@@ -125,6 +136,8 @@ def _status_line(name: str, res) -> str:
     base = f"{name}: {res.status} (dry_run={res.dry_run}) {res.counts}"
     if getattr(res, "proposals", 0):
         base += f" · {res.proposals} update proposal(s) pending review"
+    if getattr(res, "suppressed", 0):
+        base += f" · {res.suppressed} suppressed (blacklisted)"
     return base
 
 
@@ -137,6 +150,7 @@ def _emit(name: str, res, *, as_json: bool) -> None:
                 "status": res.status,
                 "counts": res.counts,
                 "proposals": getattr(res, "proposals", 0),
+                "suppressed": getattr(res, "suppressed", 0),
                 "errors": res.errors,
             },
             indent=2,
@@ -270,6 +284,57 @@ def _cmd_run_all(db: Path, args) -> int:
         reg.close()
 
 
+def _cmd_blacklist(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+    finally:
+        reg.close()
+    state = State(db)
+    try:
+        for row in state.list_blacklist(args.name):
+            print(f"{row['match_value']} · {row['reason']}")
+    finally:
+        state.close()
+    return 0
+
+
+def _cmd_blacklist_add(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+    finally:
+        reg.close()
+    state = State(db)
+    try:
+        state.blacklist_key(args.name, args.key, reason="manual")
+    finally:
+        state.close()
+    print(f"{args.name}: blacklisted {args.key}")
+    return 0
+
+
+def _cmd_blacklist_remove(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+    finally:
+        reg.close()
+    state = State(db)
+    try:
+        state.unblacklist_key(args.name, args.key)
+    finally:
+        state.close()
+    print(f"{args.name}: unblacklisted {args.key}")
+    return 0
+
+
 def _cmd_stop(db: Path, args) -> int:
     reg = Registry(db)
     try:
@@ -297,6 +362,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run_all(db, args)
     if args.command == "stop":
         return _cmd_stop(db, args)
+    if args.command == "blacklist":
+        return _cmd_blacklist(db, args)
+    if args.command == "blacklist-add":
+        return _cmd_blacklist_add(db, args)
+    if args.command == "blacklist-remove":
+        return _cmd_blacklist_remove(db, args)
     return 1  # unreachable: subparsers are required
 
 
