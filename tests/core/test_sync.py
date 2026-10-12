@@ -487,3 +487,21 @@ class TestBlacklist:
         run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
         assert st.blacklisted_keys("link1") == set()
 
+    def test_empty_store_snapshot_does_not_mass_blacklist(self, st):
+        # An empty (or malformed) GetStore response is *unknown*, not a mass
+        # deletion — a bad read must never blacklist every tracked key.
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        st.track_row(job="link1", match_value="105", row_hash="h")
+        c = FakeClient(store=[], subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        assert res.status == "blocked"
+        assert st.blacklisted_keys("link1") == set()
+
+    def test_store_missing_match_column_does_not_mass_blacklist(self, st):
+        # Rows present but without the match column -> empty key set -> unknown.
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        rows = [{"No": 1, "I7_1_2": "Alice"}]  # no SbjNum
+        c = FakeClient(store=rows, subjects=subjects())
+        run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        assert st.blacklisted_keys("link1") == set()
+

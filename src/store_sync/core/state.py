@@ -240,11 +240,14 @@ class State:
     # -- blacklist ---------------------------------------------------------
 
     def blacklist_key(self, job: str, match_value, *, reason: str = "manual") -> None:
+        # Re-adding an existing key preserves its original `added_at` and never
+        # downgrades a manual entry to an auto one (manual provenance wins).
         self.conn.execute(
             "INSERT INTO blacklist (job, match_value, reason, added_at) "
             "VALUES (?, ?, ?, datetime('now')) "
             "ON CONFLICT(job, match_value) DO UPDATE SET "
-            "reason = excluded.reason, added_at = excluded.added_at",
+            "reason = CASE WHEN blacklist.reason = 'manual' "
+            "              THEN 'manual' ELSE excluded.reason END",
             (job, str(match_value), reason),
         )
         self.conn.commit()
@@ -278,8 +281,15 @@ class State:
         `added = tracked - store_keys` (a key the system wrote, now deleted by
         hand); `removed = blacklisted & store_keys` (a suppressed key re-added by
         hand). The two sets are disjoint, so write order is irrelevant.
+
+        An **empty** `store_keys` means the snapshot is *unknown* (an empty or
+        malformed `GetStore` response, or a store lacking the match column), not
+        a mass deletion — a bad read must never blacklist every tracked key, so
+        this is a no-op. Auto-clear is likewise skipped (nothing to compare).
         """
         store_keys = {str(k) for k in store_keys}
+        if not store_keys:
+            return set(), set()
         tracked = self.tracked_keys(job)
         blacklisted = self.blacklisted_keys(job)
         added = tracked - store_keys

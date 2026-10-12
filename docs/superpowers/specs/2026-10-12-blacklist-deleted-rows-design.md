@@ -117,14 +117,16 @@ After the store snapshot is loaded (step 2, `get_store`) and **before**
 `plan()`:
 
 ```python
-store_keys = {str(r.get(match.store_col)) for r in store_rows if match.store_col in r}
+store_keys = {_s(r.get(match.store_col)) for r in store_rows if match.store_col in r}
 added, removed = state.reconcile_blacklist(config.job, store_keys)
 blacklisted = state.blacklisted_keys(config.job)
 ```
 
 - Runs on dry-run and live runs alike (constraint 4) — it touches only SQLite.
-- A store-read failure raises before this point, so "absent from the snapshot"
-  can never be a truncated read; the snapshot is the full store.
+- An **empty** `store_keys` is treated as *unknown*, not a mass deletion: a
+  malformed or empty `GetStore` response (or a store lacking the match column)
+  returns `[]` without raising, so `reconcile_blacklist` is a no-op when the key
+  set is empty. Only a non-empty snapshot drives `tracked - store_keys`.
 - `plan(...)` is called with `blacklisted=blacklisted`.
 - The `plan` progress event and `done` event carry `suppressed=<n>` (count of
   blacklisted keys skipped).
@@ -210,7 +212,7 @@ convention: `0` ok, `3` unknown job.
 |------|--------|------------|
 | A genuine new row is suppressed because its key was deleted earlier | Med | Only tracked keys are auto-suppressed; the operator sees the tab and can Remove. A key that is truly new was never tracked, so it is not auto-suppressed. |
 | Operator deletes a row they actually want re-synced | Low | Remove the key in the Blacklist tab (or CLI `blacklist-remove`); or re-add the row in STG (auto-clear). |
-| A failed store read looks like a mass deletion | High | `get_store` raises before reconciliation; a truncated read never reaches it. Only a full snapshot drives `tracked - store_keys`. |
+| A failed store read looks like a mass deletion | High | An empty/malformed `GetStore` response returns `[]` without raising; `reconcile_blacklist` treats an empty key set as *unknown* (no-op), so a bad read can never mass-blacklist. Only a non-empty snapshot drives `tracked - store_keys`. |
 | Blacklist grows unbounded | Low | Bounded by the number of hand-deleted rows; auto-cleared on reappearance. |
 | Rename a job → orphaned blacklist rows | Low | Consistent with `tracked`/`proposals`; out of scope here. |
 

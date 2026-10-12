@@ -95,8 +95,9 @@ Violating any of these corrupts production data or the safety model:
 13. **Deleted rows are blacklisted, not re-added.** A match key this system has
     written (`tracked`) that is absent from the store was deleted by hand; the
     next run suppresses its `add` and records it in the per-job `blacklist`
-    (state DB). A blacklisted key back in the store is auto-cleared. Suppression
-    applies to `add` only, is never an error, and is recorded on dry-run too.
+    (state DB). A blacklisted key back in the store is auto-cleared. An empty
+    store snapshot is *unknown*, not a mass deletion. Suppression applies to
+    `add` only, is never an error, and is recorded on dry-run too.
 
 ## Docs — source of truth
 

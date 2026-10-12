@@ -168,3 +168,30 @@ class TestBlacklist:
         added, removed = st.reconcile_blacklist("j", {"101", "102"})
         assert added == set()
         assert st.blacklisted_keys("j") == set()
+
+    def test_reconcile_empty_store_keys_is_a_noop(self, st):
+        # An empty store snapshot is *unknown*, not a mass deletion.
+        st.track_row(job="j", match_value="104", row_hash="h")
+        added, removed = st.reconcile_blacklist("j", set())
+        assert added == set()
+        assert st.blacklisted_keys("j") == set()
+
+    def test_reblacklist_preserves_added_at(self, st):
+        st.blacklist_key("j", "104", reason="deleted")
+        st.conn.execute(
+            "UPDATE blacklist SET added_at = '2020-01-01 00:00:00' "
+            "WHERE job = 'j' AND match_value = '104'"
+        )
+        st.conn.commit()
+        st.blacklist_key("j", "104", reason="deleted")  # re-detected
+        assert st.list_blacklist("j")[0]["added_at"] == "2020-01-01 00:00:00"
+
+    def test_reblacklist_preserves_manual_reason(self, st):
+        st.blacklist_key("j", "104", reason="manual")
+        st.blacklist_key("j", "104", reason="deleted")  # auto re-detect
+        assert st.list_blacklist("j")[0]["reason"] == "manual"
+
+    def test_manual_reason_upgrades_a_deleted_entry(self, st):
+        st.blacklist_key("j", "104", reason="deleted")
+        st.blacklist_key("j", "104", reason="manual")  # operator confirms
+        assert st.list_blacklist("j")[0]["reason"] == "manual"

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, pull
-from store_sync.core.planner import Plan, plan
+from store_sync.core.planner import Plan, _s, plan
 from store_sync.core.preflight import _pairing_errors, preflight
 from store_sync.core.stg_client import Cancelled
 from store_sync.core.writer import apply_plan
@@ -200,9 +200,10 @@ def run_sync(
         # Reconcile the blacklist against the store snapshot: a tracked key gone
         # from the store was deleted by hand (blacklist it); a blacklisted key
         # back in the store was re-added by hand (clear it). Runs on dry-run too
-        # — it mutates only SQLite, never the store.
+        # — it mutates only SQLite, never the store. An empty snapshot is
+        # *unknown*, not a mass deletion (see `State.reconcile_blacklist`).
         store_keys = {
-            str(r.get(match.store_col))
+            _s(r.get(match.store_col))
             for r in store_rows
             if match.store_col in r
         }
