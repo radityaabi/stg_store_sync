@@ -31,6 +31,7 @@ from filelock import FileLock, Timeout
 from store_sync.core.config import human, load_config
 from store_sync.core.os_scheduler import (
     add as os_add,
+    plan as os_plan,
     remove as os_remove,
     status as os_status,
     sync as os_sync,

@@ -408,3 +408,48 @@ class TestRunDue:
         assert seen["p"] is not None
         assert str(seen["p"]).endswith(".env")
         assert "stg_store_sync" in str(seen["p"])   # repo-root .env, not CWD
+
+
+class TestScheduleCmd:
+    def test_schedule_list_shows_status(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        monkeypatch.setattr(cli, "os_status", lambda entries: {"a": "missing"})
+        assert main(["schedule", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "a" in out and "missing" in out
+
+    def test_schedule_add_unknown_job_is_3(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(tmp_path / "s.db"))
+        assert main(["schedule", "add", "nope"]) == 3
+
+    def test_schedule_add_manual_only_is_3(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")            # add_job leaves it manual-only/disabled
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        assert main(["schedule", "add", "a"]) == 3
+
+    def test_schedule_add_calls_os(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        seen = []
+        monkeypatch.setattr(cli, "os_add", lambda name, sched: seen.append(name) or "ok")
+        assert main(["schedule", "add", "a"]) == 0
+        assert seen == ["a"]
+
+    def test_schedule_remove_unknown_job_is_3(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(tmp_path / "s.db"))
+        assert main(["schedule", "remove", "nope"]) == 3
+
+    def test_schedule_sync_calls_os(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        seen = []
+        monkeypatch.setattr(cli, "os_sync", lambda entries: seen.append(1) or "synced")
+        assert main(["schedule", "sync"]) == 0
+        assert seen == [1]
