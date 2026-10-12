@@ -215,3 +215,26 @@ class TestCounts:
     def test_summary_counts(self):
         p = make_plan()
         assert p.counts == {"add": 1, "update": 1, "same": 1, "conflict": 0}
+
+
+class TestBlacklist:
+    def test_blacklisted_key_is_not_added(self):
+        p = make_plan(blacklisted={"104"})
+        assert [a.match_value for a in p.actions if a.kind == "add"] == []
+        assert p.suppressed == ["104"]
+
+    def test_suppressed_not_counted_as_action(self):
+        p = make_plan(blacklisted={"104"})
+        assert p.counts["add"] == 0
+
+    def test_blacklisted_key_in_store_is_planned_normally(self):
+        # 101 is in the store and in the blacklist → auto-clear is upstream, but
+        # the planner itself must not suppress an in-store key.
+        p = make_plan(blacklisted={"101"})
+        assert [a.match_value for a in p.actions if a.kind == "same"] == ["101"]
+        assert p.suppressed == []
+
+    def test_none_blacklist_is_unchanged_behaviour(self):
+        p = make_plan(blacklisted=None)
+        assert [a.match_value for a in p.actions if a.kind == "add"] == ["104"]
+        assert p.suppressed == []

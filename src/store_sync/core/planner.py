@@ -35,6 +35,7 @@ class Plan:
     actions: list[Action] = field(default_factory=list)
     quarantined: list[dict] = field(default_factory=list)
     next_tag: int = 1
+    suppressed: list[str] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -82,6 +83,7 @@ def plan(
     columns: list[ColumnBinding],
     id_column: str,
     store_columns: list[str] | None = None,
+    blacklisted: set[str] | None = None,
 ) -> Plan:
     """Classify every source record and store row into a write plan.
 
@@ -93,12 +95,17 @@ def plan(
     reset any omitted column to its default, so payloads must carry every column:
     ADD blanks unmapped columns, UPDATE retains the existing row's values.
 
+    ``blacklisted`` is the set of match keys the job suppresses (hand-deleted
+    rows). A key in it is skipped and recorded in ``Plan.suppressed``; it produces
+    no ``add`` action and is not counted.
+
     An ``update`` action carries a per-column ``diffs`` list
     (``[{"col", "old", "new"}]``) computed byte-for-byte on ``str()``; a row with
     no diffs is classified ``same`` and produces no write proposal.
     """
     p = Plan()
     p.next_tag = _next_tag(store_rows, id_column)
+    blacklisted = {str(k) for k in (blacklisted or set())}
     if store_columns is None:
         store_columns = sorted({k for r in store_rows for k in r})
 
@@ -153,6 +160,9 @@ def plan(
     next_tag = p.next_tag
     for key in sorted(set(src_keys) - set(store_keys), key=lambda k: src_by_key[k].get(match.source_var, k)):
         if key in src_dups:
+            continue
+        if key in blacklisted:
+            p.suppressed.append(key)
             continue
         p.actions.append(
             Action("add", key, id_column, next_tag, _add_payload(src_by_key[key], key, next_tag))
