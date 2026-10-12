@@ -451,3 +451,39 @@ def test_run_preflight_never_reads_xml(st):
     assert called == []
     assert terms["T_QPM1_1"] == "QPM1"
 
+
+class TestBlacklist:
+    def test_tracked_then_deleted_key_is_not_readded(self, st):
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        # 104 absent from the store this run -> deleted by hand.
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        kinds = [x[0] for x in c.calls]
+        assert "add" not in kinds                    # 104 not re-added
+        assert res.status == "ok"                    # suppression is not an error
+        assert res.suppressed == 1
+        assert st.blacklisted_keys("link1") == {"104"}
+
+    def test_suppression_recorded_on_dry_run(self, st):
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=True), client=c, state=st)
+        assert res.counts.get("add", 0) == 0
+        assert res.suppressed == 1
+        assert st.blacklisted_keys("link1") == {"104"}   # state written, store not
+
+    def test_blacklisted_key_back_in_store_is_cleared_and_planned(self, st):
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        st.blacklist_key("link1", "104", reason="deleted")
+        rows = store_rows() + [{"No": 4, "SbjNum": "104", "I7_1_2": "Dave", "Q32": 44}]
+        c = FakeClient(store=rows, subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        assert st.blacklisted_keys("link1") == set()     # auto-cleared
+        assert res.suppressed == 0
+
+    def test_untracked_absent_key_is_not_blacklisted(self, st):
+        # 103 is in the store but not in the source; it was never tracked.
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+        assert st.blacklisted_keys("link1") == set()
+

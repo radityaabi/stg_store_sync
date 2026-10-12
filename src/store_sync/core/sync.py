@@ -63,6 +63,7 @@ class SyncResult:
     errors: list[str] = field(default_factory=list)
     run_id: int | None = None
     proposals: int = 0  # update proposals recorded for operator review
+    suppressed: int = 0  # blacklisted keys skipped (not re-added)
 
 
 def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
@@ -196,6 +197,18 @@ def run_sync(
         _emit("store", total=len(store_rows))
         store_columns = sorted({k for r in store_rows for k in r})
 
+        # Reconcile the blacklist against the store snapshot: a tracked key gone
+        # from the store was deleted by hand (blacklist it); a blacklisted key
+        # back in the store was re-added by hand (clear it). Runs on dry-run too
+        # — it mutates only SQLite, never the store.
+        store_keys = {
+            str(r.get(match.store_col))
+            for r in store_rows
+            if match.store_col in r
+        }
+        state.reconcile_blacklist(config.job, store_keys)
+        blacklisted = state.blacklisted_keys(config.job)
+
         # readiness preconditions (computed early; acted on before any write).
         # We defer the block until after conflict recording so the run log stays
         # complete for store-side duplicates the planner already flags.
@@ -210,8 +223,9 @@ def run_sync(
             columns=config.binding.columns,
             id_column=config.store.id_column,
             store_columns=store_columns,
+            blacklisted=blacklisted,
         )
-        _emit("plan", counts=dict(p.counts))
+        _emit("plan", counts=dict(p.counts), suppressed=len(p.suppressed))
 
         # record conflicts/quarantine (always, dry-run included)
         for action in p.actions:
@@ -229,19 +243,23 @@ def run_sync(
             for err in readiness_errs:
                 state.record_conflict(run_id, match_value=None, reason=err)
             _finish("blocked", {})
-            _emit("done", status="blocked", counts={}, dry_run=dry_run)
+            _emit("done", status="blocked", counts={}, dry_run=dry_run,
+                  suppressed=len(p.suppressed))
             return SyncResult(
                 plan=p, dry_run=dry_run, status="blocked", counts={},
                 errors=list(readiness_errs), run_id=run_id,
+                suppressed=len(p.suppressed),
             )
 
         # 4b) fail-closed on store-side conflicts ----------------------------
         if p.blocked:
             errors.extend(a.reason for a in p.actions if a.kind == "conflict")
             _finish("blocked", p.counts)
-            _emit("done", status="blocked", counts=dict(p.counts), dry_run=dry_run)
+            _emit("done", status="blocked", counts=dict(p.counts), dry_run=dry_run,
+                  suppressed=len(p.suppressed))
             return SyncResult(plan=p, dry_run=dry_run, status="blocked",
-                              counts=p.counts, errors=errors, run_id=run_id)
+                              counts=p.counts, errors=errors, run_id=run_id,
+                              suppressed=len(p.suppressed))
 
         # source-side duplicates are skipped but the run continues; when any
         # non-conflicting writes were applied the run is `partial`, not `ok`.
@@ -295,10 +313,12 @@ def run_sync(
         # and the run is finished exactly once as `cancelled`.
         if wres.cancelled:
             _finish("cancelled", wres.counts)
-            _emit("done", status="cancelled", counts=dict(wres.counts), dry_run=dry_run)
+            _emit("done", status="cancelled", counts=dict(wres.counts), dry_run=dry_run,
+                  suppressed=len(p.suppressed))
             return SyncResult(
                 plan=p, dry_run=dry_run, status="cancelled", counts=wres.counts,
                 errors=errors, run_id=run_id, proposals=proposals,
+                suppressed=len(p.suppressed),
             )
 
         if errors:
@@ -309,10 +329,12 @@ def run_sync(
             status = "ok"
 
         _finish(status, wres.counts)
-        _emit("done", status=status, counts=dict(wres.counts), errors=list(errors), dry_run=dry_run)
+        _emit("done", status=status, counts=dict(wres.counts), errors=list(errors),
+              dry_run=dry_run, suppressed=len(p.suppressed))
         return SyncResult(
             plan=p, dry_run=dry_run, status=status, counts=wres.counts,
             errors=errors, run_id=run_id, proposals=proposals,
+            suppressed=len(p.suppressed),
         )
     except Exception as e:  # noqa: BLE001 - guarantee a finished run
         logger.exception("unexpected error during run_sync")
