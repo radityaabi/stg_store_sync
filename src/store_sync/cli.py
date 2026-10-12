@@ -22,18 +22,60 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from filelock import FileLock, Timeout
 
 from store_sync.core.config import human, load_config
+from store_sync.core.os_scheduler import (
+    add as os_add,
+    remove as os_remove,
+    status as os_status,
+    sync as os_sync,
+)
 from store_sync.core.registry import Registry
+from store_sync.core.scheduler import Scheduler
 from store_sync.core.stg_client import STGClient
 from store_sync.core.state import State
 from store_sync.core.sync import run_sync
 
 DEFAULT_STATE = "state.db"
+
+
+def _now() -> datetime:
+    """Clock hook (monkeypatched in tests)."""
+    return datetime.now()
+
+
+def _load_env() -> None:
+    """Load `.env` independent of CWD, then fall back to a CWD search.
+
+    An OS task starts in an arbitrary directory, so `load_dotenv()`'s upward
+    search finds nothing. The project-root `.env` is loaded explicitly first;
+    already-set environment variables win (`override=False`).
+    """
+    root = Path(__file__).resolve().parents[2]  # src/store_sync/cli.py → repo root
+    project_env = root / ".env"
+    if project_env.is_file():
+        load_dotenv(project_env, override=False)
+    else:
+        load_dotenv(find_dotenv(), override=False)
+
+
+class _FilteredRegistry:
+    """Registry view restricted to a set of names (or all when `names` is None)."""
+
+    def __init__(self, reg, names: list[str] | None):
+        self._reg = reg
+        self._names = names
+
+    def list_entries(self):
+        entries = self._reg.list_entries()
+        if self._names is None:
+            return entries
+        return [e for e in entries if e.name in self._names]
 
 
 def _exit_for(status: str) -> int:
@@ -94,6 +136,19 @@ def build_parser() -> argparse.ArgumentParser:
     blr = sub.add_parser("blacklist-remove", help="unsuppress a key for a job")
     blr.add_argument("name", help="registered job name")
     blr.add_argument("key", help="match-key value to unsuppress")
+
+    rd = sub.add_parser("run-due", help="run every enabled job that is due now")
+    rd.add_argument("--job", help="restrict to one job (runs only if due)")
+    rd.add_argument("--json", action="store_true", help="machine-readable output")
+
+    sch = sub.add_parser("schedule", help="manage OS-level schedule tasks")
+    sch_sub = sch.add_subparsers(dest="schedule_command", required=True)
+    sch_sub.add_parser("list", help="show each job's OS registration status")
+    sch_add = sch_sub.add_parser("add", help="register one job's OS task")
+    sch_add.add_argument("name")
+    sch_rem = sch_sub.add_parser("remove", help="unregister one job's OS task")
+    sch_rem.add_argument("name")
+    sch_sub.add_parser("sync", help="reconcile all jobs' OS tasks")
 
     return p
 
@@ -284,6 +339,125 @@ def _cmd_run_all(db: Path, args) -> int:
         reg.close()
 
 
+def _cmd_run_due(db: Path, args) -> int:
+    """Run every enabled job that is due now (the OS-task wake-up target)."""
+    reg = Registry(db)
+    state = State(db)
+    client = None
+    try:
+        if args.job and args.job not in reg.names():
+            print(f"error: no such job: {args.job!r}", file=sys.stderr)
+            return 3
+
+        names = [args.job] if args.job else None
+        collected: list[str] = []
+        scheduler = Scheduler(
+            _FilteredRegistry(reg, names), collected.append, now_fn=_now
+        )
+        scheduler.tick()
+
+        # Drop anything already claimed this minute (a GUI fire may have run it).
+        now = _now()
+        minute_key = now.strftime("%Y-%m-%dT%H:%M")
+        due = [n for n in collected if state.claim_due(n, minute_key)]
+        state.prune_os_fired(
+            (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M")
+        )
+        if not due:
+            print("no jobs due")
+            return 0
+
+        client = _client_from_env()
+        if client is None:
+            print(
+                "error: STG_SERVER/STG_USER/STG_PASSWORD must be set", file=sys.stderr
+            )
+            return 1
+
+        codes: list[int] = []
+        fired: list[dict] = []
+        for name in due:
+            lock = _acquire_lock(f"{db}.{name}.lock")
+            try:
+                try:
+                    lock.acquire()
+                except Timeout:
+                    print(
+                        f"error: another run holds the lock for {name}",
+                        file=sys.stderr,
+                    )
+                    codes.append(3)
+                    continue
+                code, res = _run_one(reg, state, client, name, None,
+                                     as_json=args.json)
+                codes.append(code)
+                fired.append({"job": name, "status": getattr(res, "status", None)})
+            finally:
+                if lock.is_locked:
+                    lock.release()
+        if args.json:
+            print(json.dumps({"fired": fired}, indent=2))
+        return _worst_code(codes)
+    finally:
+        if client is not None:
+            _close_client(client)
+        state.close()
+        reg.close()
+
+
+def _cmd_schedule_list(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        entries = reg.list_entries()
+        st = os_status(entries)
+    finally:
+        reg.close()
+    for e in entries:
+        print(f"{e.name} · {human(e.schedule)} · OS: {st.get(e.name, '?')}")
+    return 0
+
+
+def _cmd_schedule_add(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+        entry = reg.get_entry(args.name)
+    finally:
+        reg.close()
+    if not entry.enabled or os_plan(entry.schedule) is None:
+        print(
+            f"error: {args.name!r} is disabled or manual-only — nothing to register",
+            file=sys.stderr,
+        )
+        return 3
+    print(os_add(args.name, entry.schedule))
+    return 0
+
+
+def _cmd_schedule_remove(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+    finally:
+        reg.close()
+    print(os_remove(args.name))
+    return 0
+
+
+def _cmd_schedule_sync(db: Path, args) -> int:
+    reg = Registry(db)
+    try:
+        entries = reg.list_entries()
+    finally:
+        reg.close()
+    print(os_sync(entries))
+    return 0
+
+
 def _cmd_blacklist(db: Path, args) -> int:
     reg = Registry(db)
     try:
@@ -350,7 +524,7 @@ def _cmd_stop(db: Path, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv()
+    _load_env()
     args = build_parser().parse_args(argv)
     db = _db_path()
 
@@ -360,6 +534,15 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(db, args)
     if args.command == "run-all":
         return _cmd_run_all(db, args)
+    if args.command == "run-due":
+        return _cmd_run_due(db, args)
+    if args.command == "schedule":
+        return {
+            "list": _cmd_schedule_list,
+            "add": _cmd_schedule_add,
+            "remove": _cmd_schedule_remove,
+            "sync": _cmd_schedule_sync,
+        }[args.schedule_command](db, args)
     if args.command == "stop":
         return _cmd_stop(db, args)
     if args.command == "blacklist":

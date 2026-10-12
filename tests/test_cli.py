@@ -1,6 +1,8 @@
 """Tests for store_sync.cli — registry-backed subcommands (spec §7)."""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from store_sync import cli
@@ -54,6 +56,15 @@ def set_creds(monkeypatch):
     monkeypatch.setenv("STG_SERVER", "https://example.test")
     monkeypatch.setenv("STG_USER", "u")
     monkeypatch.setenv("STG_PASSWORD", "p")
+
+
+def set_enabled(db, name, *, schedule, enabled):
+    reg = Registry(db)
+    try:
+        reg.set_schedule(name, schedule)
+        reg.set_enabled(name, enabled)
+    finally:
+        reg.close()
 
 
 def clear_creds(monkeypatch):
@@ -304,3 +315,96 @@ class TestBlacklist:
 
         payload = json.loads(capsys.readouterr().out)
         assert payload["suppressed"] == 2
+
+
+class TestRunDue:
+    def test_runs_only_due_jobs(self, tmp_path, capsys, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        ran = []
+        monkeypatch.setattr(
+            cli, "_run_one",
+            lambda reg, st, c, name, dry, **kw: (ran.append(name), (0, None))[1],
+        )
+        monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 10, 12, 10, 40))
+        assert main(["run-due"]) == 0
+        assert ran == ["a"]
+
+    def test_not_due_does_not_run(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        ran = []
+        monkeypatch.setattr(
+            cli, "_run_one", lambda *a, **k: (ran.append(a[3]), (0, None))[1]
+        )
+        monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 10, 12, 10, 41))
+        assert main(["run-due"]) == 0
+        assert ran == []
+
+    def test_second_fire_same_minute_is_skipped(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        ran = []
+        monkeypatch.setattr(
+            cli, "_run_one", lambda *a, **k: (ran.append(a[3]), (0, None))[1]
+        )
+        monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 10, 12, 10, 40))
+        main(["run-due"])
+        main(["run-due"])
+        assert ran == ["a"]
+
+    def test_job_filter(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        add_job(db, "b")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        set_enabled(db, "b", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        ran = []
+        monkeypatch.setattr(
+            cli, "_run_one", lambda *a, **k: (ran.append(a[3]), (0, None))[1]
+        )
+        monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 10, 12, 10, 40))
+        assert main(["run-due", "--job", "b"]) == 0
+        assert ran == ["b"]
+
+    def test_unknown_job_is_3(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        assert main(["run-due", "--job", "nope"]) == 3
+
+    def test_missing_credentials_is_1(self, tmp_path, monkeypatch):
+        db = tmp_path / "s.db"
+        add_job(db, "a")
+        set_enabled(db, "a", schedule=Schedule("minute", 10), enabled=True)
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(db))
+        clear_creds(monkeypatch)
+        monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 10, 12, 10, 40))
+        assert main(["run-due"]) == 1
+
+    def test_env_resolves_from_foreign_cwd(self, tmp_path, monkeypatch):
+        # A scheduled task starts in an arbitrary CWD; .env must still load.
+        # NOTE: the module-level `_no_dotenv` fixture neutralises
+        # `cli.load_dotenv`, so this test asserts the *path resolution*, not the
+        # env values: `_load_env` must point at the project-root `.env`.
+        monkeypatch.chdir(tmp_path)
+        seen = {}
+        monkeypatch.setattr(cli, "load_dotenv", lambda p=None, **k: seen.update(p=p))
+        cli._load_env()
+        assert seen["p"] is not None
+        assert str(seen["p"]).endswith(".env")
+        assert "stg_store_sync" in str(seen["p"])   # repo-root .env, not CWD
