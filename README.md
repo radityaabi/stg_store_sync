@@ -60,6 +60,26 @@ pip install -e ".[dev]"
 cp .env.example .env   # fill STG_SERVER / STG_USER / STG_PASSWORD
 ```
 
+### One-command setup (env + deps + .env + verify + OS schedule)
+
+Idempotent — safe to re-run; an existing `.env` is never modified.
+
+```bash
+# Linux / macOS / WSL
+./scripts/setup.sh
+
+# Windows / VDI (PowerShell)
+.\scripts\setup.ps1
+```
+
+Each script: finds Python 3.12+, creates/reuses `.venv`, installs the package
++ dev extras, creates `.env` from `.env.example` (prompting for credentials),
+runs the test suite, then registers one OS task per job (`schedule sync`).
+Non-interactive: pass `-StgServer/-StgUser/-StgPassword` (PS) or
+`--stg-server/--stg-user/--stg-password` (bash), plus `-NonInteractive` /
+`--non-interactive`. `-SkipTests` / `--skip-tests` and `-SkipSchedule` /
+`--skip-schedule` trim steps; skipping tests also skips OS registration.
+
 ## Safety
 
 The target store may be used by a **LIVE** survey. Writes change production
