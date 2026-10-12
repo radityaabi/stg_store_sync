@@ -56,6 +56,8 @@ class JobDetail(QWidget):
     apply_proposals_requested = Signal(list)
     dismiss_proposals_requested = Signal(list)
     pair_requested = Signal()
+    blacklist_add_requested = Signal(str)
+    blacklist_remove_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,6 +84,7 @@ class JobDetail(QWidget):
         self.tabs.addTab(self._schedule_tab(), "Schedule")
         self.tabs.addTab(self._history_tab(), "History")
         self.tabs.addTab(self._conflicts_tab(), "Conflicts")
+        self.tabs.addTab(self._blacklist_tab(), "Blacklist")
         self.tabs.addTab(self._proposals_tab(), "Proposed updates")
         root.addWidget(self.tabs, stretch=1)
         root.addWidget(self._run_progress_panel())
@@ -251,6 +254,43 @@ class JobDetail(QWidget):
         lay.addWidget(self.conflicts_view)
         return w
 
+    def _blacklist_tab(self) -> QWidget:
+        """Suppressed keys — rows deleted by hand that must not be re-added."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+        self.blacklist_model = _DictTableModel(["match", "reason", "added"], self)
+        self.blacklist_view = _dict_view(self.blacklist_model)
+        lay.addWidget(self.blacklist_view, stretch=1)
+
+        bar = QHBoxLayout()
+        self.blacklist_add_edit = QLineEdit()
+        self.blacklist_add_edit.setPlaceholderText("match key")
+        self.blacklist_add_button = QPushButton("➕ Add key")
+        self.blacklist_add_button.setObjectName("btn_primary")
+        self.blacklist_add_button.clicked.connect(self._on_blacklist_add)
+        self.blacklist_remove_button = QPushButton("🗑 Remove selected")
+        self.blacklist_remove_button.setObjectName("btn_danger")
+        self.blacklist_remove_button.clicked.connect(self._on_blacklist_remove)
+        bar.addWidget(self.blacklist_add_edit)
+        bar.addWidget(self.blacklist_add_button)
+        bar.addStretch(1)
+        bar.addWidget(self.blacklist_remove_button)
+        lay.addLayout(bar)
+        return w
+
+    def _on_blacklist_add(self) -> None:
+        key = self.blacklist_add_edit.text().strip()
+        if key:
+            self.blacklist_add_requested.emit(key)
+
+    def _on_blacklist_remove(self) -> None:
+        rows = self.blacklist_view.selectionModel().selectedRows()
+        keys = [self.blacklist_model.data(r) for r in rows]
+        if keys:
+            self.blacklist_remove_requested.emit(keys)
+
     def _proposals_tab(self) -> QWidget:
         """Pending update proposals the operator reviews + applies (spec §6)."""
         w = QWidget()
@@ -371,6 +411,7 @@ class JobDetail(QWidget):
         self.binding_model.set_columns(job.binding.columns)
 
         self.set_proposals([])
+        self.set_blacklist([])
 
         self.enabled_check.setChecked(bool(getattr(entry, "enabled", False)))
         self._set_schedule(getattr(entry, "schedule", None) or Schedule())
@@ -402,6 +443,10 @@ class JobDetail(QWidget):
         """Fill the Proposed-updates tab with pending proposals."""
         self.proposals_model.set_rows(rows)
         self._update_proposals_empty_state()
+
+    def set_blacklist(self, rows: list[dict]) -> None:
+        """Fill the Blacklist tab (match · reason · added)."""
+        self.blacklist_model.set_rows(rows)
 
     # -- live run timeline -------------------------------------------------
     def set_run_progress(self, event: dict) -> None:

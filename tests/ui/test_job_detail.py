@@ -362,3 +362,43 @@ def test_set_pairing_stores_index_and_terms(detail):
 def test_load_does_not_wipe_stored_pull_term(detail, entry, job_with_pull_term):
     detail.load(entry, job_with_pull_term)
     assert detail.binding_model.columns()[0].pull_term == "QPM1"
+
+
+def test_blacklist_tab_renders_rows():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_blacklist([
+        {"match": "104", "reason": "deleted", "added": "2026-10-12 10:00:00"},
+    ])
+    assert d.blacklist_model.rowCount() == 1
+    assert d.blacklist_model.data(d.blacklist_model.index(0, 0)) == "104"
+
+
+def test_blacklist_remove_emits_selected_key():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_blacklist([{"match": "104", "reason": "deleted", "added": ""}])
+    seen = []
+    d.blacklist_remove_requested.connect(lambda keys: seen.append(keys))
+    d.blacklist_view.selectRow(0)
+    d._on_blacklist_remove()
+    assert seen == [["104"]]
+
+
+def test_blacklist_add_emits_typed_key():
+    d = JobDetail()
+    d.load(E(), a_job())
+    seen = []
+    d.blacklist_add_requested.connect(lambda key: seen.append(key))
+    d.blacklist_add_edit.setText("  999  ")
+    d._on_blacklist_add()
+    assert seen == ["999"]
+
+
+def test_reload_clears_blacklist():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_blacklist([{"match": "104", "reason": "deleted", "added": ""}])
+    assert d.blacklist_model.rowCount() == 1
+    d.load(E(), b_job())
+    assert d.blacklist_model.rowCount() == 0

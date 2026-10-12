@@ -477,6 +477,8 @@ class Controller:
         w.run_activated.connect(self._show_run)
         w.apply_proposals_requested.connect(self._apply_proposals)
         w.dismiss_proposals_requested.connect(self._dismiss_proposals)
+        w.blacklist_add_requested.connect(self._blacklist_add)
+        w.blacklist_remove_requested.connect(self._blacklist_remove)
         w.back.connect(w.show_dashboard)
         # Double-clicking a dashboard row opens (and loads) the job detail.
         w.dashboard.job_activated.connect(self._open_job)
@@ -609,6 +611,7 @@ class Controller:
             detail.set_history([])
             detail.set_conflicts([])
             detail.set_proposals([])
+            detail.set_blacklist([])
             return
         runs = self.state.recent_runs(name)
         detail.set_history(
@@ -635,6 +638,37 @@ class Controller:
             ]
         )
         self._load_proposals(name)
+        self._load_blacklist(name)
+
+    def _load_blacklist(self, name: str) -> None:
+        rows = self.state.list_blacklist(name)
+        self.window.job_detail.set_blacklist(
+            [
+                {
+                    "match": r.get("match_value", ""),
+                    "reason": r.get("reason", ""),
+                    "added": r.get("added_at", ""),
+                }
+                for r in rows
+            ]
+        )
+
+    def _blacklist_add(self, key: str) -> None:
+        name = self._detail_name
+        if not name or not key:
+            return
+        self.state.blacklist_key(name, key, reason="manual")
+        self._load_blacklist(name)
+        self.window.set_status(f"blacklisted {key}", _STATUS_OK)
+
+    def _blacklist_remove(self, keys: list) -> None:
+        name = self._detail_name
+        if not name or not keys:
+            return
+        for key in keys:
+            self.state.unblacklist_key(name, key)
+        self._load_blacklist(name)
+        self.window.set_status(f"unblacklisted {len(keys)} key(s)", _STATUS_OK)
 
     def _load_proposals(self, name: str) -> None:
         """Fill the Proposed-updates tab with this job's pending proposals."""

@@ -59,6 +59,8 @@ class MainWindow(QMainWindow):
     run_activated = Signal(int)
     apply_proposals_requested = Signal(list)
     dismiss_proposals_requested = Signal(list)
+    blacklist_add_requested = Signal(str)
+    blacklist_remove_requested = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -140,6 +142,12 @@ class MainWindow(QMainWindow):
         )
         self.job_detail.dismiss_proposals_requested.connect(
             self.dismiss_proposals_requested.emit
+        )
+        self.job_detail.blacklist_add_requested.connect(
+            self.blacklist_add_requested.emit
+        )
+        self.job_detail.blacklist_remove_requested.connect(
+            self.blacklist_remove_requested.emit
         )
 
         # Run detail -> window proxies.

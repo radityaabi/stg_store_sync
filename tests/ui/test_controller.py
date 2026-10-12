@@ -1105,3 +1105,29 @@ def test_job_from_detail_carries_pairing(tmp_path):
     assert job.source.survey_index == {"T_QPM1_1": "QPM1"}
     assert job.binding.columns[0].pull_term == "QPM1"
     c.stop(); w.close()
+
+
+# -- blacklist: manual add / remove (spec) ----------------------------------
+
+def test_blacklist_manual_add_and_remove_persist(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c._detail_name = "a"
+    w.blacklist_add_requested.emit("104")
+    assert c.state.blacklisted_keys("a") == {"104"}
+    w.blacklist_remove_requested.emit(["104"])
+    assert c.state.blacklisted_keys("a") == set()
+    c.stop()
+    w.close()
+
+
+def test_open_job_fills_blacklist_tab(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c.state.blacklist_key("a", "104", reason="deleted")
+    c._open_job("a")
+    assert w.job_detail.blacklist_model.rowCount() == 1
+    c.stop()
+    w.close()
