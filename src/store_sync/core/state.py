@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS blacklist (
     added_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (job, match_value)
 );
+CREATE TABLE IF NOT EXISTS os_fired (
+    job        TEXT NOT NULL,
+    minute_key TEXT NOT NULL,
+    PRIMARY KEY (job, minute_key)
+);
 """
 
 
@@ -299,3 +304,27 @@ class State:
         for key in removed:
             self.unblacklist_key(job, key)
         return added, removed
+
+    # -- OS due marker -----------------------------------------------------
+
+    def claim_due(self, job: str, minute_key: str) -> bool:
+        """Claim `(job, minute_key)`; True only for the first caller.
+
+        Guards a GUI fire and an OS fire in the same wall-clock minute against
+        running a job twice. `minute_key` is `now.strftime("%Y-%m-%dT%H:%M")`.
+        """
+        cur = self.conn.execute(
+            "INSERT INTO os_fired (job, minute_key) VALUES (?, ?) "
+            "ON CONFLICT(job, minute_key) DO NOTHING",
+            (job, minute_key),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def prune_os_fired(self, keep_after: str) -> int:
+        """Delete markers strictly older than `keep_after`; return the count."""
+        cur = self.conn.execute(
+            "DELETE FROM os_fired WHERE minute_key < ?", (keep_after,)
+        )
+        self.conn.commit()
+        return cur.rowcount

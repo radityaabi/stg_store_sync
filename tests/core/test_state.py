@@ -195,3 +195,24 @@ class TestBlacklist:
         st.blacklist_key("j", "104", reason="deleted")
         st.blacklist_key("j", "104", reason="manual")  # operator confirms
         assert st.list_blacklist("j")[0]["reason"] == "manual"
+
+
+class TestOsFired:
+    def test_first_claim_wins_second_in_same_minute_loses(self, st):
+        assert st.claim_due("j", "2026-10-12T10:40") is True
+        assert st.claim_due("j", "2026-10-12T10:40") is False
+
+    def test_different_minute_claims_again(self, st):
+        assert st.claim_due("j", "2026-10-12T10:40") is True
+        assert st.claim_due("j", "2026-10-12T10:41") is True
+
+    def test_claim_is_per_job(self, st):
+        assert st.claim_due("a", "2026-10-12T10:40") is True
+        assert st.claim_due("b", "2026-10-12T10:40") is True
+
+    def test_prune_removes_old_keys(self, st):
+        st.claim_due("j", "2026-10-11T00:00")
+        st.claim_due("j", "2026-10-12T10:40")
+        removed = st.prune_os_fired("2026-10-12T00:00")
+        assert removed == 1
+        assert st.claim_due("j", "2026-10-11T00:00") is True  # pruned → reclaimable
