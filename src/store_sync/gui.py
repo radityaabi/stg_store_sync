@@ -44,6 +44,7 @@ from store_sync.core.scheduler import Scheduler  # noqa: E402
 from store_sync.core import os_scheduler  # noqa: E402
 from store_sync.core.stg_client import STGClient  # noqa: E402
 from store_sync.core.state import State  # noqa: E402
+from store_sync.core.timefmt import local_time  # noqa: E402
 from store_sync.core.planner import Action  # noqa: E402
 from store_sync.core.writer import apply_updates  # noqa: E402
 from store_sync.core.sync import run_preflight, run_sync  # noqa: E402
@@ -111,8 +112,8 @@ def _run_log(run: dict) -> str:
     """A readable log for the Run detail console (stored log or a summary)."""
     lines = [
         f"run #{run.get('id')} · {run.get('status') or 'unknown'}",
-        f"started:  {run.get('started_at') or '-'}",
-        f"finished: {run.get('finished_at') or '-'}",
+        f"started:  {local_time(run.get('started_at')) or '-'}",
+        f"finished: {local_time(run.get('finished_at')) or '-'}",
         f"dry_run:  {bool(run.get('dry_run'))}",
     ]
     counts = run.get("counts") or {}
@@ -671,7 +672,7 @@ class Controller:
         detail.set_history(
             [
                 {
-                    "time": r.get("finished_at") or r.get("started_at") or "",
+                    "time": local_time(r.get("finished_at") or r.get("started_at")),
                     "status": r.get("status") or "",
                     "counts": _fmt_counts(r.get("counts"), dry_run=r.get("dry_run")),
                     "id": r.get("id"),
@@ -701,7 +702,7 @@ class Controller:
                 {
                     "match": r.get("match_value", ""),
                     "reason": r.get("reason", ""),
-                    "added": r.get("added_at", ""),
+                    "added": local_time(r.get("added_at")),
                 }
                 for r in rows
             ]

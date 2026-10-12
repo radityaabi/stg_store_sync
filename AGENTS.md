@@ -14,7 +14,7 @@ default.**
 Standalone repo — **never import from `stg_automation_suite`** (or any sibling
 repo). Reference only.
 
-Status: core + GUI + CLI implemented; **336 tests green**; not yet enabled for a
+Status: core + GUI + CLI implemented; **489 tests green**; not yet enabled for a
 live write. See `tasks/todo.md` for the phase ledger.
 
 ## Stack & layout
@@ -24,11 +24,11 @@ live write. See `tasks/todo.md` for the phase ledger.
 - `src/` layout, package `store_sync`:
   - `core/` — engine: `config`, `stg_client`, `fetcher`, `binding`, `preflight`,
     `planner`, `writer`, `adoption`, `state`, `registry`, `run_queue`,
-    `scheduler`, `sync` (orchestrator).
+    `scheduler`, `sync` (orchestrator), `timefmt` (UTC→local display).
   - `ui/` — PySide6 views: `main_window`, `dashboard`, `job_detail`,
     `run_detail`, `dialogs`, `job_table_model`, `mapping_io`, `theme`, threads.
   - `cli.py`, `gui.py` — entry points.
-- `tests/` mirrors `src/` (`tests/core`, `tests/ui`); 23 test modules.
+- `tests/` mirrors `src/` (`tests/core`, `tests/ui`); 28 test modules.
 - Runtime state: SQLite at `~/.stg_store_sync/state.db` (override
   `STG_STORE_SYNC_DB`). Tables: `jobs`/`job_columns` (Registry),
   `runs`/`conflicts`/`tracked` (State).

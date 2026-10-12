@@ -5,6 +5,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 from store_sync.core.config import human
 from store_sync.core.registry import JobEntry
+from store_sync.core.timefmt import local_time
 
 
 class JobListModel(QAbstractTableModel):
@@ -55,7 +56,7 @@ class JobListModel(QAbstractTableModel):
         if col == 5:
             return e.last_status
         if col == 6:
-            return e.last_finished_at
+            return local_time(e.last_finished_at)
         if col == 7:
             return self._os_status.get(e.name, "")
         return None
