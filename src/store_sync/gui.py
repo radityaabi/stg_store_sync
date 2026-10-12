@@ -19,6 +19,7 @@ import sys
 import threading
 import types
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -40,6 +41,7 @@ from store_sync.core.config import (  # noqa: E402
 from store_sync.core.registry import Registry  # noqa: E402
 from store_sync.core.run_queue import RunQueue  # noqa: E402
 from store_sync.core.scheduler import Scheduler  # noqa: E402
+from store_sync.core import os_scheduler  # noqa: E402
 from store_sync.core.stg_client import STGClient  # noqa: E402
 from store_sync.core.state import State  # noqa: E402
 from store_sync.core.planner import Action  # noqa: E402
@@ -374,6 +376,7 @@ class Controller:
         except Exception:  # noqa: BLE001 - never crash the save slot
             logger.exception("controller: failed to save job %r", name)
             return False
+        self._auto_sync_os(name)
         self._refresh()
         return True
 
@@ -382,6 +385,7 @@ class Controller:
             self.registry.delete(name)
         except KeyError:
             return
+        self._auto_sync_os(name)
         if self._detail_name == name:
             self._detail_name = None
         self._refresh()
@@ -474,6 +478,7 @@ class Controller:
         w.export_requested.connect(self._export_mapping)
         w.refresh_requested.connect(self._refresh)
         w.schedules_requested.connect(self._show_schedules)
+        w.os_sync_requested.connect(self.sync_os_schedule)
         w.run_activated.connect(self._show_run)
         w.apply_proposals_requested.connect(self._apply_proposals)
         w.dismiss_proposals_requested.connect(self._dismiss_proposals)
@@ -551,8 +556,57 @@ class Controller:
         self._refresh()
 
     def _on_due(self, name: str) -> None:
+        # The OS task may have fired the same minute; claim it so only one runs.
         # `Scheduler.tick` already enqueued the job; this is UI feedback only.
+        if not self.state.claim_due(name, self._minute_key()):
+            return
         self.window.set_status(f"scheduled {name}", _STATUS_WARN)
+
+    def _minute_key(self) -> str:
+        """The cross-process minute key shared with `run-due` (spec §6)."""
+        return datetime.now().strftime("%Y-%m-%dT%H:%M")
+
+    def _auto_sync_os(self, name: str) -> None:
+        """Register/unregister one job's OS task; never raise, never block."""
+        try:
+            entry = self.registry.get_entry(name)
+        except KeyError:
+            try:
+                os_scheduler.remove(name)
+            except Exception:  # noqa: BLE001 - schtasks/crontab may be absent
+                logger.warning(
+                    "os schedule remove failed for %r", name, exc_info=True
+                )
+            return
+        try:
+            if entry.enabled and os_scheduler.plan(entry.schedule) is not None:
+                os_scheduler.add(name, entry.schedule)
+            else:
+                os_scheduler.remove(name)
+        except Exception:  # noqa: BLE001 - never block/fail the save
+            logger.warning("os schedule sync failed for %r", name, exc_info=True)
+            self.window.set_status(
+                "OS schedule not updated (register manually)", _STATUS_WARN
+            )
+
+    def sync_os_schedule(self) -> None:
+        """Reconcile every job's OS task; report in the status bar."""
+        try:
+            msg = os_scheduler.sync(self.registry.list_entries())
+        except Exception:  # noqa: BLE001 - schtasks/crontab may be absent
+            logger.warning("os schedule sync failed", exc_info=True)
+            self.window.set_status("OS schedule sync failed", _STATUS_FAIL)
+            return
+        self.window.set_status(msg, _STATUS_OK)
+        self._refresh()
+
+    def _os_status(self, entries) -> dict:
+        """Best-effort per-job OS registration status for the dashboard badge."""
+        try:
+            return os_scheduler.status(entries)
+        except Exception:  # noqa: BLE001
+            logger.warning("os status failed", exc_info=True)
+            return {}
 
     # -- refresh -----------------------------------------------------------
 
@@ -561,7 +615,7 @@ class Controller:
             return
         entries = self.registry.list_entries()
         dash = self.window.dashboard
-        dash.set_entries(entries)
+        dash.set_entries(entries, os_status=self._os_status(entries))
 
         snap = self.queue.snapshot()
         running = 1 if snap.active else 0

@@ -36,6 +36,7 @@ class Dashboard(QWidget):
     schedules_requested = Signal()
     refresh_requested = Signal()
     job_activated = Signal(str)
+    os_sync_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,6 +124,8 @@ class Dashboard(QWidget):
 
         schedules_btn = QPushButton("⏰ Schedules")
         schedules_btn.clicked.connect(self.schedules_requested.emit)
+        os_btn = QPushButton("🗓 Sync OS schedule")
+        os_btn.clicked.connect(self.os_sync_requested.emit)
         refresh_btn = QPushButton("🔄 Refresh")
         refresh_btn.clicked.connect(self.refresh_requested.emit)
 
@@ -132,6 +135,7 @@ class Dashboard(QWidget):
         self.edit_button = edit_btn
         self.delete_button = delete_btn
         self.schedules_button = schedules_btn
+        self.os_sync_button = os_btn
         self.refresh_button = refresh_btn
 
         lay.addWidget(new_btn)
@@ -142,6 +146,7 @@ class Dashboard(QWidget):
         lay.addWidget(delete_btn)
         lay.addStretch(1)
         lay.addWidget(schedules_btn)
+        lay.addWidget(os_btn)
         lay.addWidget(refresh_btn)
         return w
 
@@ -172,8 +177,9 @@ class Dashboard(QWidget):
         return host
 
     # -- app API -----------------------------------------------------------
-    def set_entries(self, entries: list[JobEntry]) -> None:
-        self.model.set_entries(entries)
+    def set_entries(self, entries: list[JobEntry], *,
+                    os_status: dict[str, str] | None = None) -> None:
+        self.model.set_entries(entries, os_status=os_status)
         self._update_empty_state()
 
     def _update_empty_state(self) -> None:

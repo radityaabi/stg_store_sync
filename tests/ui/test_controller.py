@@ -1131,3 +1131,37 @@ def test_open_job_fills_blacklist_tab(tmp_path):
     assert w.job_detail.blacklist_model.rowCount() == 1
     c.stop()
     w.close()
+
+
+def test_on_due_claims_minute_marker(tmp_path):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c._on_due("a")
+    # a second call in the same minute is a no-op (marker already claimed)
+    assert c.state.claim_due("a", c._minute_key()) is False
+    c.stop(); w.close()
+
+
+def test_auto_sync_swallows_os_error(tmp_path, monkeypatch):
+    from store_sync import gui
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule("minute", 10), enabled=True)
+    monkeypatch.setattr(
+        gui.os_scheduler, "add",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no schtasks")),
+    )
+    # must not raise
+    c._auto_sync_os("a")
+    c.stop(); w.close()
+
+
+def test_sync_os_schedule_reports_status(tmp_path, monkeypatch):
+    from store_sync import gui
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    monkeypatch.setattr(
+        gui.os_scheduler, "sync", lambda entries: "sync: 0 added, 0 removed"
+    )
+    c.sync_os_schedule()   # must not raise
+    c.stop(); w.close()

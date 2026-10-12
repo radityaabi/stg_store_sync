@@ -10,14 +10,21 @@ from store_sync.core.registry import JobEntry
 class JobListModel(QAbstractTableModel):
     """Read-only dashboard list over `JobEntry` rows.
 
-    Only reads attributes off each entry — it never touches the registry.
+    Only reads attributes off each entry — it never touches the registry. The
+    final `OS` column shows the per-job OS registration status, supplied out of
+    band by the controller (`os_status` maps job name → status); it is not a
+    field of `JobEntry`.
     """
 
-    HEADERS = ["Name", "Store", "Survey", "Schedule", "Enabled", "Last status", "Last run"]
+    HEADERS = [
+        "Name", "Store", "Survey", "Schedule", "Enabled",
+        "Last status", "Last run", "OS",
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._entries: list[JobEntry] = []
+        self._os_status: dict[str, str] = {}
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._entries)
@@ -49,11 +56,15 @@ class JobListModel(QAbstractTableModel):
             return e.last_status
         if col == 6:
             return e.last_finished_at
+        if col == 7:
+            return self._os_status.get(e.name, "")
         return None
 
-    def set_entries(self, entries: list[JobEntry]) -> None:
+    def set_entries(self, entries: list[JobEntry], *,
+                    os_status: dict[str, str] | None = None) -> None:
         self.beginResetModel()
         self._entries = list(entries)
+        self._os_status = dict(os_status or {})
         self.endResetModel()
 
     def entry_at(self, row: int) -> JobEntry:
