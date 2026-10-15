@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from store_sync.core.config import JobConfig
 from store_sync.core.fetcher import derive_pull_terms, pull
+from store_sync.core.notify import notify_run_report
 from store_sync.core.planner import Plan, _s, plan
 from store_sync.core.preflight import _pairing_errors, preflight
 from store_sync.core.stg_client import Cancelled
@@ -107,6 +108,53 @@ def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
 
 
 def run_sync(
+    config: JobConfig,
+    *,
+    client,
+    state,
+    throttle: float = 0.0,
+    max_retries: int = 3,
+    backoff: float = 1.0,
+    should_stop=None,
+    progress=None,
+    notify: bool = True,
+    notify_out_dir=None,
+) -> SyncResult:
+    """Run one full sync, then notify the job's PIC when it added rows.
+
+    The notification is a **side channel**: it runs after the run row is already
+    finished, is wrapped so it can never raise, and cannot change the returned
+    result. Pass `notify=False` to suppress it for one invocation.
+    """
+    res = _run_sync_inner(
+        config,
+        client=client,
+        state=state,
+        throttle=throttle,
+        max_retries=max_retries,
+        backoff=backoff,
+        should_stop=should_stop,
+        progress=progress,
+    )
+    if notify:
+        _notify_safely(config, state, res, out_dir=notify_out_dir)
+    return res
+
+
+def _notify_safely(config, state, res, *, out_dir=None) -> None:
+    """Attempt the run's notification; swallow every failure.
+
+    A mailbox problem must never turn a successful sync into a failed one, so
+    any exception here is logged and dropped. `notify_run_report` already
+    records the attempt (including a `failed` outcome) in the state DB.
+    """
+    try:
+        notify_run_report(config, state, res, out_dir=out_dir)
+    except Exception:  # noqa: BLE001 — containment is the point
+        logger.exception("run notification failed for %r", config.job)
+
+
+def _run_sync_inner(
     config: JobConfig,
     *,
     client,

@@ -505,3 +505,39 @@ class TestBlacklist:
         run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
         assert st.blacklisted_keys("link1") == set()
 
+
+
+class TestNotificationWiring:
+    def test_run_sync_notifies_with_the_result(self, monkeypatch, st):
+        import store_sync.core.sync as sync_mod
+        seen = []
+        monkeypatch.setattr(sync_mod, "notify_run_report",
+                            lambda cfg, s, res, **kw: seen.append(res) or None)
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st)
+        assert seen == [res]
+
+    def test_run_sync_notify_false_skips_notification(self, monkeypatch, st):
+        import store_sync.core.sync as sync_mod
+        monkeypatch.setattr(sync_mod, "notify_run_report",
+                            lambda *a, **k: pytest.fail("must not notify"))
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        run_sync(config(dry_run=False), client=c, state=st, notify=False)
+
+    def test_notification_failure_does_not_change_run_status(self, monkeypatch, st):
+        import store_sync.core.sync as sync_mod
+
+        def boom(*a, **k):
+            raise RuntimeError("mailbox down")
+
+        monkeypatch.setattr(sync_mod, "notify_run_report", boom)
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st)
+        assert res.status == "ok" and res.counts["add"] == 1
+        assert st.get_run(res.run_id)["status"] == "ok"
+
+    def test_default_run_records_a_notification_row(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st)
+        row = st.notification_for_run(res.run_id)
+        assert row is not None and row["status"] == "skipped"
