@@ -55,15 +55,24 @@ def test_subject_names_job_and_add_count():
     assert s.startswith("[StoreSync] link1 — 3 row(s) added")
 
 
+def test_render_is_summary_only_no_row_table():
+    """The body carries the summary; it must NOT dump the added rows (the run
+    log has them). Guards against re-adding a data table to the mail."""
+    html = notify.render_report(a_job(), a_result(adds=3))
+    assert "Rows added" not in html
+    assert "<th" not in html
+    # The summary facts are still present.
+    assert "link1" in html and "Added" in html
+
+
 def test_render_escapes_store_values():
-    html = notify.render_report(
-        a_job(), a_result(values={"I7_1_2": "<script>x</script>"}))
+    """Every interpolated value is escaped — a hostile job name must not inject
+    markup into the mail body."""
+    job = a_job()
+    job = JobConfig("<script>x</script>", job.store, job.source, job.binding,
+                    job.write, pic=job.pic)
+    html = notify.render_report(job, a_result(adds=1))
     assert "<script>" not in html and "&lt;script&gt;" in html
-
-
-def test_render_caps_the_add_list():
-    html = notify.render_report(a_job(), a_result(adds=60), max_rows=50)
-    assert "and 10 more" in html
 
 
 def test_notify_sends_when_adds_and_records_sent(monkeypatch, state):
@@ -141,7 +150,7 @@ def test_notify_skipped_records_no_body(monkeypatch, state):
 def test_notify_sent_records_the_body(monkeypatch, state):
     monkeypatch.setattr(notify, "_send", lambda **kw: OwaOutcome("sent", ""))
     notify.notify_run_report(a_job(pic="a@x.com"), state, a_result(adds=1))
-    assert "Rows added" in state.notification_for_run(1)["body_html"]
+    assert "StoreSync" in state.notification_for_run(1)["body_html"]
 
 
 def test_notify_accepts_a_stored_body_and_subject(monkeypatch, state):

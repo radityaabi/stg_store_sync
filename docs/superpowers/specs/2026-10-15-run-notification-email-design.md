@@ -119,8 +119,8 @@ the mail is attempted.
     invoked for every run (when `notify=True`) so that a non-send is recorded
     with its reason rather than silently omitted (§6).
   - `subject_line(job_cfg, result) -> str`.
-  - `render_report(job_cfg, result, *, max_rows=50) -> str` — pure, HTML,
-    inline-styled, every interpolated value escaped.
+  - `render_report(job_cfg, result) -> str` — pure, HTML,
+    inline-styled, summary only, every interpolated value escaped.
   - `SendOutcome(status, reason, to, cc)` — `sent | skipped | failed | dry_run`.
   - `notify_run_report(job_cfg, state, result, *, force=False, out_dir=None,
     profile_dir=None) -> SendOutcome` — resolves recipients, applies the skip
@@ -228,13 +228,11 @@ must not be able to break the layout.
 
 - A fact table: Job, Store (`id` + id column), Survey, Run `#id`, Time (local,
   via `core/timefmt.py`), Added, Update proposals, Suppressed, Status.
-- A table of the added rows: the match key plus each mapped store column, capped
-  at `max_rows = 50`, followed by `and N more row(s) — see the run log.` when
-  truncated.
+- Summary only — no table of the added rows. The per-row detail lives in the
+  run log; the mailbox gets the headline.
 - No attachment.
 
-A run with no mapped columns beyond the match key still renders (the table shows
-the key alone).
+A run with no mapped columns beyond the match key still renders.
 
 ## 8. Transport — OWA via Playwright
 

@@ -198,7 +198,8 @@ the job detail and are never mailed.
 _Avoid_: owner, contact, recipient list.
 
 **Notification** (run report):
-The HTML summary of one run — facts plus the added rows — mailed to the job's
+The HTML summary of one run — its facts (job, store, survey, run, time, counts,
+status), summary only — mailed to the job's
 PIC. Sent by OWA via Playwright (no SMTP), only for a live run that added at
 least one row. A side channel: it never changes a run's status, and every
 attempt (sent / skipped / failed / dry_run) is recorded.

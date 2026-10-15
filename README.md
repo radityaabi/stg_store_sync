@@ -107,7 +107,7 @@ project-root `.env` (resolved independently of the working directory).
 ## Email notifications
 
 After a run that **added at least one row**, the job's PIC list is mailed an HTML
-summary (facts + the added rows). Dry-runs and clean (0-add) runs never mail, and
+summary (the run's facts, no row data). Dry-runs and clean (0-add) runs never mail, and
 a failed send never changes the run's status.
 
 ```bash

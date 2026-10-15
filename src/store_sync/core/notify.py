@@ -46,20 +46,13 @@ __all__ = [
     "notify_run_report",
 ]
 
-#: How many added rows appear in the body before it is truncated.
-MAX_ROWS_IN_BODY = 50
-
 # Inline styles only: Outlook strips <style> blocks and external stylesheets.
 _WRAP = "font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1f2937"
 _H2 = "font-size:18px;margin:0 0 8px"
-_H3 = "font-size:15px;margin:16px 0 6px"
 _MUTED = "color:#6b7280;font-size:12px;margin:8px 0"
 _TABLE = "border-collapse:collapse;margin:6px 0;width:auto"
-_TH = "text-align:left;padding:4px 10px;border-bottom:2px solid #d1d5db;font-size:12px"
 _LABEL = "padding:3px 10px 3px 0;color:#6b7280;font-size:12px;vertical-align:top"
 _VALUE = "padding:3px 0;font-size:13px"
-_CELL = "padding:3px 10px 3px 0;border-bottom:1px solid #eef2f7;font-size:12px"
-_CELL_NUM = _CELL + ";text-align:right"
 
 
 @dataclass(frozen=True)
@@ -86,10 +79,6 @@ def should_notify(result) -> bool:
 
 def _add_count(result) -> int:
     return int(result.counts.get("add", 0) or 0)
-
-
-def _added_actions(result) -> list:
-    return [a for a in result.plan.actions if a.kind == "add"]
 
 
 def subject_line(job_cfg, result) -> str:
@@ -119,12 +108,14 @@ def _fmt_time(result) -> str:
     return local_time(raw) if raw else "—"
 
 
-def render_report(job_cfg, result, *, max_rows: int = MAX_ROWS_IN_BODY) -> str:
+def render_report(job_cfg, result) -> str:
     """Render the mail body: self-contained, inline-styled, English.
 
-    Every interpolated value is escaped — store and survey values are operator-
-    and API-supplied and must not be able to break the layout. No script, no
-    remote image, no external URL (mail-client constraints).
+    A **summary only** — the run's facts, no table of the added rows. The row
+    detail lives in the run log; the mailbox gets the headline (job, counts,
+    status), not a data dump. Every interpolated value is escaped — store and
+    survey values are operator- and API-supplied and must not be able to break
+    the layout. No script, no remote image, no external URL.
     """
     e = _html.escape
 
@@ -145,57 +136,13 @@ def render_report(job_cfg, result, *, max_rows: int = MAX_ROWS_IN_BODY) -> str:
         for label, value in facts
     )
 
-    actions = _added_actions(result)
-    shown = actions[:max_rows]
-    if shown:
-        cols = _column_labels(job_cfg, shown)
-        header = "".join(f'<th style="{_TH}">{e(c)}</th>' for c in cols)
-        body_rows = "".join(
-            "<tr>" + "".join(
-                f'<td style="{_CELL}">{e(_cell_value(a.payload, c))}</td>'
-                for c in cols
-            ) + "</tr>"
-            for a in shown
-        )
-        remainder = len(actions) - len(shown)
-        more = (
-            f'<p style="{_MUTED}">and {remainder} more row(s) — see the run '
-            f"log.</p>"
-            if remainder > 0
-            else ""
-        )
-        rows_block = (
-            f'<h3 style="{_H3}">Rows added</h3>'
-            f'<table style="{_TABLE}" cellpadding="0" cellspacing="0">'
-            f"<tr>{header}</tr>{body_rows}</table>{more}"
-        )
-    else:
-        rows_block = ""
-
     return (
         f'<div style="{_WRAP}">'
         f'<h2 style="{_H2}">StoreSync — {_add_count(result):,} row(s) added</h2>'
         f'<p style="{_MUTED}">Automated report from the scheduled run.</p>'
         f'<table style="{_TABLE}" cellpadding="0" cellspacing="0">{fact_rows}</table>'
-        f"{rows_block}"
         f"</div>"
     )
-
-
-def _column_labels(job_cfg, actions) -> list[str]:
-    """Match key first, then the mapped store columns (stable, deduped)."""
-    match = job_cfg.binding.match
-    labels: list[str] = []
-    if match is not None:
-        labels.append(match.store_col)
-    for col in job_cfg.binding.columns:
-        if col.store_col not in labels:
-            labels.append(col.store_col)
-    return labels
-
-
-def _cell_value(payload: dict, key: str) -> str:
-    return "" if payload.get(key) is None else str(payload.get(key))
 
 
 def _send(*, to, cc, subject, html, profile_dir=None) -> OwaOutcome:
