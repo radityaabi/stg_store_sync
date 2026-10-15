@@ -202,3 +202,10 @@ def test_source_config_null_survey_index_is_empty():
     # A hand-edited YAML `survey_index:` (blank) loads as None; must not crash.
     s = SourceConfig.from_dict({"survey_id": "SURV", "survey_index": None})
     assert s.survey_index == {}
+
+
+def test_pic_round_trips_and_is_omitted_when_empty():
+    d = sample_dict(); d["pic"] = "a@x.com; b@y.com"
+    assert JobConfig.from_dict(d).pic == "a@x.com; b@y.com"
+    assert JobConfig.from_dict(d).to_dict()["pic"] == "a@x.com; b@y.com"
+    assert "pic" not in JobConfig.from_dict(sample_dict()).to_dict()

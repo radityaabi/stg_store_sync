@@ -264,6 +264,7 @@ class JobConfig:
     source: SourceConfig
     binding: BindingConfig
     write: WriteConfig
+    pic: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any], do_validate: bool = True) -> "JobConfig":
@@ -273,6 +274,7 @@ class JobConfig:
             source=SourceConfig.from_dict(d.get("source", {})),
             binding=BindingConfig.from_dict(d.get("binding", {})),
             write=WriteConfig.from_dict(d.get("write", {})),
+            pic=str(d.get("pic", "")),
         )
         if do_validate:
             errors = validate(cfg)
@@ -281,13 +283,16 @@ class JobConfig:
         return cfg
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "job": self.job,
             "store": self.store.to_dict(),
             "source": self.source.to_dict(),
             "binding": self.binding.to_dict(),
             "write": self.write.to_dict(),
         }
+        if self.pic:
+            out["pic"] = self.pic
+        return out
 
 
 def validate(cfg: JobConfig) -> list[str]:

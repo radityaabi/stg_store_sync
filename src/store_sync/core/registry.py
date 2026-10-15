@@ -41,6 +41,11 @@ _PAIRING_COLUMNS = (
     ("paired_survey_id", "TEXT NOT NULL DEFAULT ''"),
 )
 
+_PIC_COLUMNS = (
+    # (column, DDL) — the per-job PIC recipient list (run notifications).
+    ("pic", "TEXT NOT NULL DEFAULT ''"),
+)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +63,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     schedule_weekday INTEGER NOT NULL DEFAULT 0,
     survey_index     TEXT NOT NULL DEFAULT '{}',
     paired_survey_id TEXT NOT NULL DEFAULT '',
+    pic            TEXT NOT NULL DEFAULT '',
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -89,6 +95,7 @@ class JobEntry:
     column_count: int
     last_status: str | None
     last_finished_at: str | None
+    pic: str = ""
 
 
 _ENTRY_FIELDS = """
@@ -97,6 +104,7 @@ SELECT jobs.name, jobs.store_id, jobs.id_column, jobs.survey_id,
        jobs.dry_run, jobs.enabled,
        jobs.schedule_unit, jobs.schedule_every, jobs.schedule_at,
        jobs.schedule_weekday,
+       jobs.pic,
        (SELECT COUNT(*) FROM job_columns c WHERE c.job_id = jobs.id) AS column_count,
 """
 
@@ -120,6 +128,7 @@ class Registry:
         self.conn.executescript(_SCHEMA)
         self._add_schedule_columns()
         self._add_pairing_columns()
+        self._add_pic_column()
         self._drop_legacy_columns(("window_days", "date_type", "schedule", "delete_policy"))
         self.conn.commit()
 
@@ -160,6 +169,20 @@ class Registry:
                 "ALTER TABLE job_columns ADD COLUMN pull_term TEXT NOT NULL DEFAULT ''"
             )
 
+    def _add_pic_column(self) -> None:
+        """Add the PIC column when an older DB lacks it.
+
+        An existing row reads back `pic=''` (no recipients → notifications are
+        skipped, never an error).
+        """
+        present = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(jobs)")
+        }
+        for col, ddl in _PIC_COLUMNS:
+            if col not in present:
+                self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+
     def _drop_legacy_columns(self, columns: tuple[str, ...]) -> None:
         """Drop legacy `jobs` columns when present (SQLite ≥ 3.35)."""
         present = {
@@ -188,6 +211,7 @@ class Registry:
             int(bool(job.write.dry_run)),
             json.dumps(job.source.survey_index),
             str(job.source.paired_survey_id),
+            str(job.pic),
         )
 
     def _replace_columns(self, job_id: int, job: JobConfig) -> None:
@@ -245,6 +269,7 @@ class Registry:
             column_count=row["column_count"],
             last_status=row["last_status"],
             last_finished_at=row["last_finished_at"],
+            pic=row["pic"],
         )
 
     def _has_runs(self) -> bool:
@@ -277,9 +302,9 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "dry_run, survey_index, paired_survey_id, enabled, "
+                    "dry_run, survey_index, paired_survey_id, pic, enabled, "
                     "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, int(bool(enabled)),
                      *self._schedule_values(schedule)),
                 )
@@ -302,7 +327,7 @@ class Registry:
         sets = [
             "store_id = ?", "id_column = ?", "survey_id = ?",
             "match_source_var = ?", "match_store_col = ?",
-            "dry_run = ?", "survey_index = ?", "paired_survey_id = ?",
+            "dry_run = ?", "survey_index = ?", "paired_survey_id = ?", "pic = ?",
             "name = ?",
         ]
         # values order matches `sets`; job name for the WHERE is the last value.
@@ -362,6 +387,7 @@ class Registry:
             write=WriteConfig(
                 dry_run=bool(row["dry_run"]),
             ),
+            pic=row["pic"],
         )
 
     # -- queries -----------------------------------------------------------

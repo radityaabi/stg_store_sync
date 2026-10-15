@@ -287,3 +287,29 @@ def test_legacy_row_reads_back_unpaired(tmp_path):
     cols = {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
     assert {"survey_index", "paired_survey_id"} <= cols
     r.close()
+
+
+def test_pic_round_trips_through_registry(tmp_path):
+    r = Registry(tmp_path / "reg.db")
+    job = a_job(); job.pic = "a@x.com"
+    r.add(job)
+    assert r.get("link1").pic == "a@x.com"
+    assert r.get_entry("link1").pic == "a@x.com"
+    r.close()
+
+
+def test_registry_migrates_old_db_without_pic(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "name TEXT NOT NULL UNIQUE, store_id INTEGER NOT NULL, "
+                "id_column TEXT NOT NULL, survey_id TEXT NOT NULL, "
+                "match_source_var TEXT NOT NULL, match_store_col TEXT NOT NULL, "
+                "dry_run INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 0)")
+    con.execute("INSERT INTO jobs (name, store_id, id_column, survey_id, "
+                "match_source_var, match_store_col) VALUES ('old', 1, 'No', 'S', 'M', 'M')")
+    con.commit(); con.close()
+    r = Registry(p)
+    assert r.get_entry("old").pic == ""
+    r.close()
