@@ -65,19 +65,30 @@ class FakeKeyboard:
 
 
 class FakePage:
-    def __init__(self, *, editor_visible: bool = True):
+    def __init__(self, *, editor_visible: bool = True, send_via: str = "title"):
         self.goto_url: str | None = None
         self.keyboard = FakeKeyboard()
         self._editor_visible = editor_visible
+        # ``send_via`` selects which OWA Send-button selector this fake DOM
+        # answers to: ``"title"`` (legacy ``title="Send (Ctrl+Enter)"``) or
+        # ``"aria"`` (the 2026 Fluent split-button, ``aria-label="Send"`` with
+        # no ``title`` — see currentOWA.html). The real DOM changed; the
+        # locator must match both.
+        self._send_via = send_via
 
     async def goto(self, url, timeout=0):
         self.goto_url = url
+
+    def _matches_send(self, selector) -> bool:
+        if self._send_via == "aria":
+            return 'aria-label="Send"' in selector
+        return "Ctrl+Enter" in selector
 
     def locator(self, selector):
         if 'aria-label="Message body"' in selector or "Isi pesan" in selector:
             return FakeLocator(visible=self._editor_visible,
                                count=1 if self._editor_visible else 0)
-        if "Ctrl+Enter" in selector:
+        if self._matches_send(selector):
             return FakeLocator(visible=True)
         return FakeLocator(visible=False, count=0)
 
@@ -175,6 +186,25 @@ def test_editor_never_ready_reports_failed(fake_pw_never_ready, monkeypatch, tmp
     ))
     assert out.status == "failed"
     assert "OWA" in out.detail
+
+
+def test_editor_ready_when_send_button_only_has_aria_label(monkeypatch):
+    """Regression: the 2026 OWA Send button carries ``aria-label="Send"`` and no
+    ``title="Send (Ctrl+Enter)"`` (see currentOWA.html). The compose-ready wait
+    must accept that button, or every send times out with "Compose shell not
+    ready"."""
+    page = FakePage(editor_visible=True, send_via="aria")
+    editor = page.locator('div[aria-label="Message body"]')
+    ready = asyncio.run(owa_mailer._wait_compose_ready(page, editor, timeout=1000))
+    assert ready is True
+
+
+def test_editor_ready_with_legacy_title_send_button(monkeypatch):
+    """The legacy ``title="Send (Ctrl+Enter)"`` selector must keep working."""
+    page = FakePage(editor_visible=True, send_via="title")
+    editor = page.locator('div[aria-label="Message body"]')
+    ready = asyncio.run(owa_mailer._wait_compose_ready(page, editor, timeout=1000))
+    assert ready is True
 
 
 def test_transport_error_is_contained_as_failed(monkeypatch, tmp_path):

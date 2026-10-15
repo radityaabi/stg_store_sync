@@ -34,6 +34,19 @@ logger = logging.getLogger(__name__)
 
 _PROFILE_DIRNAME = "playwright_profile_owa"
 
+#: The OWA Send control. Historically a ``button`` carrying
+#: ``title="Send (Ctrl+Enter)"``; since the 2026 Fluent split-button rewrite it
+#: is ``button[aria-label="Send"]`` (the "Ctrl+Enter" text now survives only in
+#: a hidden ``role="tooltip"`` node, not a ``title`` attribute). Both are
+#: matched so the wait survives either OWA build — a Send button the locator
+#: cannot see is the difference between a send and a 60 s "Compose shell not
+#: ready" timeout.
+_SEND_BUTTON = (
+    'button[title*="Ctrl+Enter"], '
+    'button[aria-label="Send"], '
+    'button[aria-label="Kirim"]'
+)
+
 
 def _default_profile_dir() -> Path:
     """The persistent browser profile, overridable via ``STG_OWA_PROFILE_DIR``."""
@@ -119,7 +132,7 @@ async def _wait_compose_ready(page, editor_locator, timeout: int = 60000) -> boo
     ``False`` on any stage timing out.
     """
     start_time = time.monotonic()
-    send_locator = page.locator('button[title*="Ctrl+Enter"]')
+    send_locator = page.locator(_SEND_BUTTON)
 
     while (time.monotonic() - start_time) * 1000 < timeout:
         try:
@@ -370,7 +383,7 @@ async def send_mail_via_owa_async(
                     except Exception:
                         pass
 
-                    send_btn = page.locator('button[title*="Ctrl+Enter"]').first
+                    send_btn = page.locator(_SEND_BUTTON).first
                     if await send_btn.is_visible():
                         try:
                             await send_btn.click(force=True, timeout=1500)
