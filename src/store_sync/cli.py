@@ -29,6 +29,7 @@ from dotenv import find_dotenv, load_dotenv
 from filelock import FileLock, Timeout
 
 from store_sync.core.config import human, load_config
+from store_sync.core.notify import notify_run_report
 from store_sync.core.os_scheduler import (
     add as os_add,
     plan as os_plan,
@@ -36,11 +37,12 @@ from store_sync.core.os_scheduler import (
     status as os_status,
     sync as os_sync,
 )
+from store_sync.core.planner import Plan
 from store_sync.core.registry import Registry
 from store_sync.core.scheduler import Scheduler
 from store_sync.core.stg_client import STGClient
 from store_sync.core.state import State
-from store_sync.core.sync import run_sync
+from store_sync.core.sync import SyncResult, run_sync
 
 DEFAULT_STATE = "state.db"
 
@@ -116,6 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the job's dry_run flag and actually write",
     )
     run.add_argument("--json", action="store_true", help="print the result as JSON")
+    run.add_argument(
+        "--no-notify", action="store_true",
+        help="skip the PIC run-notification email for this run",
+    )
 
     run_all = sub.add_parser("run-all", help="run every registered job")
     run_all.add_argument(
@@ -123,6 +129,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="only run jobs whose scheduler flag is enabled",
     )
     run_all.add_argument("--json", action="store_true", help="print each result as JSON")
+    run_all.add_argument(
+        "--no-notify", action="store_true",
+        help="skip the PIC run-notification email for every run",
+    )
 
     stop = sub.add_parser("stop", help="request a running job stop (in-app only)")
     stop.add_argument("name", help="registered job name")
@@ -141,6 +151,25 @@ def build_parser() -> argparse.ArgumentParser:
     rd = sub.add_parser("run-due", help="run every enabled job that is due now")
     rd.add_argument("--job", help="restrict to one job (runs only if due)")
     rd.add_argument("--json", action="store_true", help="machine-readable output")
+    rd.add_argument(
+        "--no-notify", action="store_true",
+        help="skip the PIC run-notification email for every run",
+    )
+
+    sr = sub.add_parser(
+        "send-report", help="re-send a finished run's report to the job's PIC"
+    )
+    sr.add_argument("name", help="registered job name")
+    sr.add_argument(
+        "--run-id", type=int, default=None, help="run id (default: the newest run)"
+    )
+    sr.add_argument(
+        "--dry-run", action="store_true",
+        help="render the report and write it out, but do not send",
+    )
+    sr.add_argument("--out", default=None, help="directory for the --dry-run HTML")
+    sr.add_argument("--force", action="store_true", help="send even if already sent")
+    sr.add_argument("--json", action="store_true", help="machine-readable output")
 
     sch = sub.add_parser("schedule", help="manage OS-level schedule tasks")
     sch_sub = sch.add_subparsers(dest="schedule_command", required=True)
@@ -194,6 +223,9 @@ def _status_line(name: str, res) -> str:
         base += f" · {res.proposals} update proposal(s) pending review"
     if getattr(res, "suppressed", 0):
         base += f" · {res.suppressed} suppressed (blacklisted)"
+    report = getattr(res, "report_status", "")
+    if report:
+        base += f" · report={report}"
     return base
 
 
@@ -207,6 +239,7 @@ def _emit(name: str, res, *, as_json: bool) -> None:
                 "counts": res.counts,
                 "proposals": getattr(res, "proposals", 0),
                 "suppressed": getattr(res, "suppressed", 0),
+                "report_status": getattr(res, "report_status", ""),
                 "errors": res.errors,
             },
             indent=2,
@@ -230,7 +263,8 @@ def _cmd_list(db: Path, args) -> int:
     return 0
 
 
-def _run_one(reg: Registry, state: State, client, name: str, dry_run, *, as_json: bool):
+def _run_one(reg: Registry, state: State, client, name: str, dry_run, *,
+             as_json: bool, notify: bool = True):
     """Load, run, and report one job. Returns `(exit_code, result)`."""
     try:
         job = reg.get(name)
@@ -241,7 +275,10 @@ def _run_one(reg: Registry, state: State, client, name: str, dry_run, *, as_json
     if dry_run is not None:
         job.write.dry_run = dry_run
 
-    res = run_sync(job, client=client, state=state, throttle=0.05)
+    res = run_sync(job, client=client, state=state, throttle=0.05, notify=notify)
+    # The notification is recorded, not returned: read it back for display.
+    row = state.notification_for_run(res.run_id) if res.run_id else None
+    res.report_status = (row or {}).get("status", "")
     _emit(name, res, as_json=as_json)
     return _exit_for(res.status), res
 
@@ -273,7 +310,8 @@ def _cmd_run(db: Path, args) -> int:
             )
             return 1
 
-        code, _ = _run_one(reg, state, client, args.name, args.dry_run, as_json=args.json)
+        code, _ = _run_one(reg, state, client, args.name, args.dry_run,
+                           as_json=args.json, notify=not args.no_notify)
         return code
     finally:
         if client is not None:
@@ -326,7 +364,8 @@ def _cmd_run_all(db: Path, args) -> int:
                     codes.append(3)
                     continue
                 code, _ = _run_one(
-                    reg, state, client, name, None, as_json=args.json
+                    reg, state, client, name, None, as_json=args.json,
+                    notify=not args.no_notify,
                 )
                 codes.append(code)
             finally:
@@ -390,7 +429,8 @@ def _cmd_run_due(db: Path, args) -> int:
                     codes.append(3)
                     continue
                 code, res = _run_one(reg, state, client, name, None,
-                                     as_json=args.json)
+                                     as_json=args.json,
+                                     notify=not args.no_notify)
                 codes.append(code)
                 fired.append({"job": name, "status": getattr(res, "status", None)})
             finally:
@@ -510,6 +550,69 @@ def _cmd_blacklist_remove(db: Path, args) -> int:
     return 0
 
 
+def _cmd_send_report(db: Path, args) -> int:
+    """Re-send (or rehearse) one finished run's report to the job's PIC.
+
+    Exit codes: `0` sent / skipped / dry-run, `3` unknown job or no such run,
+    `1` the transport failed. A skip is never an error — the job may simply
+    have no PIC, or the report may already have gone out.
+    """
+    reg = Registry(db)
+    try:
+        if args.name not in reg.names():
+            print(f"error: no such job: {args.name!r}", file=sys.stderr)
+            return 3
+        job = reg.get(args.name)
+    finally:
+        reg.close()
+
+    state = State(db)
+    try:
+        run = None
+        if args.run_id is not None:
+            run = state.get_run(args.run_id)
+            if run is None or run["job"] != args.name:
+                print(f"error: no such run: {args.run_id}", file=sys.stderr)
+                return 3
+        else:
+            runs = state.recent_runs(args.name, limit=1)
+            if not runs:
+                print(f"error: {args.name!r} has no runs to report", file=sys.stderr)
+                return 3
+            run = runs[0]
+
+        # Rebuild the minimum a report needs from the stored run row.
+        result = SyncResult(
+            plan=Plan(),
+            dry_run=bool(args.dry_run) or bool(run["dry_run"]),
+            status=run["status"] or "ok",
+            counts=run["counts"] or {},
+            run_id=run["id"],
+        )
+        outcome = notify_run_report(
+            job, state, result, force=args.force, out_dir=args.out,
+        )
+        if args.json:
+            print(json.dumps(
+                {
+                    "job": args.name,
+                    "run_id": run["id"],
+                    "report_status": outcome.status,
+                    "reason": outcome.reason,
+                    "to": list(outcome.to),
+                },
+                indent=2,
+            ))
+        else:
+            line = f"{args.name} run {run['id']}: report={outcome.status}"
+            if outcome.reason:
+                line += f" · {outcome.reason}"
+            print(line)
+        return 0 if outcome.status in ("sent", "skipped", "dry_run") else 1
+    finally:
+        state.close()
+
+
 def _cmd_stop(db: Path, args) -> int:
     reg = Registry(db)
     try:
@@ -546,6 +649,8 @@ def main(argv: list[str] | None = None) -> int:
         }[args.schedule_command](db, args)
     if args.command == "stop":
         return _cmd_stop(db, args)
+    if args.command == "send-report":
+        return _cmd_send_report(db, args)
     if args.command == "blacklist":
         return _cmd_blacklist(db, args)
     if args.command == "blacklist-add":

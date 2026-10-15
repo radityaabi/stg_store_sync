@@ -1,6 +1,7 @@
 """Tests for store_sync.cli — registry-backed subcommands (spec §7)."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import pytest
@@ -18,7 +19,14 @@ from store_sync.core.config import (
 )
 from store_sync.core.planner import Plan
 from store_sync.core.registry import Registry
+from store_sync.core.state import State
 from store_sync.core.sync import SyncResult
+
+
+def _send_outcome(status):
+    from store_sync.core.notify import SendOutcome
+
+    return SendOutcome(status)
 
 
 @pytest.fixture(autouse=True)
@@ -453,3 +461,76 @@ class TestScheduleCmd:
         monkeypatch.setattr(cli, "os_sync", lambda entries: seen.append(1) or "synced")
         assert main(["schedule", "sync"]) == 0
         assert seen == [1]
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    """A registry with job `link1` and one finished run that planned one add."""
+    path = tmp_path / "s.db"
+    monkeypatch.setenv("STG_STORE_SYNC_DB", str(path))
+    add_job(path, "link1")
+    st = State(path)
+    try:
+        rid = st.start_run(job="link1", dry_run=False)
+        st.finish_run(rid, status="ok", counts={"add": 1})
+    finally:
+        st.close()
+    return path
+
+
+def fake_result(status="ok", *, dry_run=False, counts=None):
+    return SyncResult(plan=Plan(), dry_run=dry_run, status=status,
+                      counts=counts if counts is not None else {"add": 1})
+
+
+class TestSendReport:
+    def test_send_report_dry_run_writes_html_without_sending(
+        self, monkeypatch, tmp_path, db
+    ):
+        # The dry-run path goes through the domain (which writes the HTML and
+        # never reaches the transport), so only the transport seam is guarded.
+        from store_sync.core import notify as notify_mod
+
+        monkeypatch.setattr(notify_mod, "_send",
+                            lambda **k: pytest.fail("must not send"))
+        code = cli.main(["send-report", "link1", "--dry-run", "--out", str(tmp_path)])
+        assert code == 0 and (tmp_path / "run_1.html").exists()
+
+    def test_send_report_unknown_job_is_3(self, db, capsys):
+        assert cli.main(["send-report", "nope"]) == 3
+
+    def test_send_report_without_a_run_is_3(self, tmp_path, monkeypatch):
+        path = tmp_path / "s.db"
+        monkeypatch.setenv("STG_STORE_SYNC_DB", str(path))
+        add_job(path, "link1")
+        assert cli.main(["send-report", "link1", "--dry-run"]) == 3
+
+    def test_send_report_force_is_passed_through(self, monkeypatch, db):
+        seen = []
+        monkeypatch.setattr(cli, "notify_run_report",
+                            lambda *a, **k: seen.append(k) or _send_outcome("sent"))
+        assert cli.main(["send-report", "link1", "--force"]) == 0
+        assert seen[0]["force"] is True
+
+    def test_send_report_failed_outcome_is_1(self, monkeypatch, db):
+        monkeypatch.setattr(cli, "notify_run_report",
+                            lambda *a, **k: _send_outcome("failed"))
+        assert cli.main(["send-report", "link1"]) == 1
+
+
+class TestNotifyFlag:
+    def test_run_no_notify_propagates(self, monkeypatch, db):
+        seen = []
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "run_sync",
+                            lambda cfg, **kw: seen.append(kw.get("notify")) or fake_result())
+        cli.main(["run", "link1", "--no-notify", "--dry-run"])
+        assert seen == [False]
+
+    def test_run_json_includes_report_status(self, monkeypatch, db, capsys):
+        monkeypatch.setattr(cli, "STGClient", _DummyClient)
+        set_creds(monkeypatch)
+        monkeypatch.setattr(cli, "run_sync", lambda cfg, **kw: fake_result())
+        cli.main(["run", "link1", "--json"])
+        assert "report_status" in json.loads(capsys.readouterr().out)
