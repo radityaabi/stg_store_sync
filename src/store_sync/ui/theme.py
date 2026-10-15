@@ -386,6 +386,17 @@ QLabel#EmptyState {
     padding: 24px;
 }
 
+/* ==== run-notification line (job PIC + run detail) ================ */
+QLabel#PicWarning {
+    color: $warning;
+    font-size: $caption_size;
+}
+
+QLabel#RunNotification {
+    color: $secondary;
+    font-size: $caption_size;
+}
+
 /* ==== console log ================================================= */
 QTextEdit#ConsoleLog {
     background: $console_bg;

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from store_sync.core.config import ColumnBinding, Schedule, human
+from store_sync.core.pic import pic_email_warning
 from store_sync.ui.job_table_model import JobTableModel
 from store_sync.ui.models import _DictTableModel, _ProposalTableModel
 from store_sync.ui.dialogs import (
@@ -143,6 +144,20 @@ class JobDetail(QWidget):
         self.dry_run_check.setChecked(True)
         row4.addWidget(self.dry_run_check)
         lay.addLayout(row4)
+
+        pic_row = QHBoxLayout()
+        pic_row.addWidget(QLabel("PIC emails:"))
+        self.pic_edit = QLineEdit()
+        self.pic_edit.setPlaceholderText("name@company.com; other@company.com")
+        self.pic_edit.textChanged.connect(self._update_pic_warning)
+        pic_row.addWidget(self.pic_edit)
+        lay.addLayout(pic_row)
+
+        self.pic_warning = QLabel("")
+        self.pic_warning.setObjectName("PicWarning")
+        self.pic_warning.setWordWrap(True)
+        lay.addWidget(self.pic_warning)
+
         lay.addStretch(1)
         return w
 
@@ -405,6 +420,8 @@ class JobDetail(QWidget):
             (match.store_col if match else "") or (match.source_var if match else "")
         )
         self.dry_run_check.setChecked(bool(job.write.dry_run))
+        self.pic_edit.setText(job.pic)
+        self._update_pic_warning(job.pic)
 
         self._survey_index = dict(job.source.survey_index)
         self._paired_survey_id = job.source.paired_survey_id
@@ -489,7 +506,12 @@ class JobDetail(QWidget):
             "dry_run": self.dry_run_check.isChecked(),
             "survey_index": dict(self._survey_index),
             "paired_survey_id": self._paired_survey_id,
+            "pic": self.pic_edit.text().strip(),
         }
+
+    def _update_pic_warning(self, text: str) -> None:
+        """Warn (never block) about PIC entries that are not email addresses."""
+        self.pic_warning.setText(pic_email_warning(text))
 
     # -- slots -------------------------------------------------------------
     def schedule(self) -> Schedule:

@@ -96,6 +96,7 @@ def test_config_fields_round_trip():
         "store_id": 17620, "id_column": "No", "survey_id": "SURV",
         "match_source_var": "SbjNum", "match_store_col": "SbjNum",
         "dry_run": True, "survey_index": {}, "paired_survey_id": "",
+        "pic": "",
     }
 
 
@@ -402,3 +403,25 @@ def test_reload_clears_blacklist():
     assert d.blacklist_model.rowCount() == 1
     d.load(E(), b_job())
     assert d.blacklist_model.rowCount() == 0
+
+
+def a_job_with_pic(pic):
+    return JobConfig("a", StoreConfig(17620, "No"), SourceConfig("SURV"),
+        BindingConfig(ColumnBinding("SbjNum", "SbjNum"),
+            [ColumnBinding("T_QPM1_1", "I7_1_2")]), WriteConfig(), pic=pic)
+
+
+def test_pic_field_loads_saves_and_warns():
+    d = JobDetail(); d.load(E(), a_job_with_pic("a@x.com; Budi"))
+    assert d.pic_edit.text() == "a@x.com; Budi"
+    assert "Budi" in d.pic_warning.text()
+    assert d.config_fields()["pic"] == "a@x.com; Budi"
+    d.pic_edit.setText("ok@y.com")
+    assert d.pic_warning.text() == "" and d.config_fields()["pic"] == "ok@y.com"
+
+
+def test_pic_field_defaults_empty_and_strips():
+    d = JobDetail(); d.load(E(), a_job())
+    assert d.pic_edit.text() == "" and d.pic_warning.text() == ""
+    d.pic_edit.setText("  a@x.com  ")
+    assert d.config_fields()["pic"] == "a@x.com"

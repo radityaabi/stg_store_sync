@@ -247,3 +247,18 @@ def test_schedule_overview_rows_and_model():
     assert dlg.model.index(0, 1).data(Qt.DisplayRole) == human(Schedule("day", 1, "03:00"))
     assert dlg.model.index(1, 1).data(Qt.DisplayRole) == "manual only"
     assert dlg.close_button.text() == "Close"
+
+
+def test_run_detail_shows_notification_line():
+    d = RunDetail()
+    d.load(_run(), [], notification={"status": "sent", "recipients": "a@x.com"})
+    assert "a@x.com" in d.notification_label.text()
+    d.load(_run(), [], notification=None)
+    assert "—" in d.notification_label.text()
+
+
+def test_run_detail_notification_line_states_reason():
+    d = RunDetail()
+    d.load(_run(), [], notification={"status": "skipped", "reason": "no rows added"})
+    assert "skipped" in d.notification_label.text()
+    assert "no rows added" in d.notification_label.text()

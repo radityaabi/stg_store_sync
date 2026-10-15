@@ -747,7 +747,10 @@ class Controller:
             return
         conflicts = self.state.conflicts_for_run(int(run_id))
         detail = self.window.run_detail
-        detail.load(run, conflicts)
+        detail.load(
+            run, conflicts,
+            notification=self.state.notification_for_run(int(run_id)),
+        )
         detail.set_log(_run_log(run))
         self.window.show_run(run_id)
 
@@ -793,6 +796,7 @@ class Controller:
             write=WriteConfig(
                 dry_run=fields["dry_run"],
             ),
+            pic=fields.get("pic", ""),
         )
 
     def _save_from_detail(self) -> None:

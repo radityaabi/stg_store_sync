@@ -50,6 +50,9 @@ class RunDetail(QWidget):
         lay.setContentsMargins(14, 12, 14, 12)
         self.summary_label = QLabel("no run selected")
         lay.addWidget(self.summary_label)
+        self.notification_label = QLabel("Mail: —")
+        self.notification_label.setObjectName("RunNotification")
+        lay.addWidget(self.notification_label)
         lay.addStretch(1)
         return frame
 
@@ -97,12 +100,13 @@ class RunDetail(QWidget):
         return frame
 
     # -- app API -----------------------------------------------------------
-    def load(self, run: dict, conflicts: list[dict]) -> None:
+    def load(self, run: dict, conflicts: list[dict], notification: dict | None = None) -> None:
         """Fill summary, counts/errors/conflicts tables from a run result."""
         run = run or {}
         status = run.get("status", "")
         run_id = run.get("id", "")
         self.summary_label.setText(f"Run #{run_id} · {status}".strip())
+        self.notification_label.setText(_notification_line(notification))
 
         counts = run.get("counts") or {}
         self.counts_model.set_rows(
@@ -116,6 +120,18 @@ class RunDetail(QWidget):
 
     def append_log(self, message: str) -> None:
         self.log_view.append(message)
+
+
+def _notification_line(notification: dict | None) -> str:
+    """One-line summary of a run's notification attempt (or the absence of one)."""
+    if not notification:
+        return "Mail: —"
+    status = notification.get("status", "")
+    if status == "sent":
+        to = notification.get("recipients") or ""
+        return f"Mail: sent to {to}" if to else "Mail: sent"
+    reason = notification.get("reason") or ""
+    return f"Mail: {status} — {reason}" if reason else f"Mail: {status}"
 
 
 def _as_error(e) -> dict:
