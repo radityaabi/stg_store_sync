@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+owa = ["playwright"]
 
 [project.scripts]
 stg-store-sync = "store_sync.gui:main"

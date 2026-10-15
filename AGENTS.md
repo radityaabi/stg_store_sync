@@ -24,7 +24,9 @@ live write. See `tasks/todo.md` for the phase ledger.
 - `src/` layout, package `store_sync`:
   - `core/` — engine: `config`, `stg_client`, `fetcher`, `binding`, `preflight`,
     `planner`, `writer`, `adoption`, `state`, `registry`, `run_queue`,
-    `scheduler`, `sync` (orchestrator), `timefmt` (UTC→local display).
+    `scheduler`, `sync` (orchestrator), `timefmt` (UTC→local display),
+    `pic` (PIC list helpers), `owa_mailer` (Playwright/OWA transport),
+    `notify` (run-notification domain).
   - `ui/` — PySide6 views: `main_window`, `dashboard`, `job_detail`,
     `run_detail`, `dialogs`, `job_table_model`, `mapping_io`, `theme`, threads.
   - `cli.py`, `gui.py` — entry points.
@@ -106,6 +108,14 @@ Violating any of these corrupts production data or the safety model:
     add-only and passes `dry_run=None` (each job's configured dry-run applies).
     A per-minute `os_fired` marker stops a GUI fire and an OS fire in the same
     minute from running twice.
+
+15. **A run notification is a side channel.** After a run that added ≥1 row, the
+    job's PIC list is mailed an HTML summary (OWA via Playwright, no SMTP).
+    It never changes a run's recorded status, never raises into `run_sync`, and
+    a dry-run or a clean (0-add) run never mails. A send that fails is recorded
+    as `failed` and nothing else changes. Every attempt — sent, skipped, failed
+    or dry_run — is a `notifications` row. A PIC entry that is not an email
+    address warns in the GUI but never blocks saving, and is never mailed.
 
 ## Docs — source of truth
 

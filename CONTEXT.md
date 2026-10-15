@@ -188,3 +188,18 @@ The check that must pass before any write — id-column existence/uniqueness,
 match-key uniqueness, strict-mode parity, and the no-op id probe. A failure
 blocks the run.
 _Avoid_: validation, sanity check.
+
+## Notifying
+
+**PIC** (person in charge):
+The per-job list of email addresses that receive the run report. Stored as one
+`;`-separated string; entries that are not email addresses are warned about in
+the job detail and are never mailed.
+_Avoid_: owner, contact, recipient list.
+
+**Notification** (run report):
+The HTML summary of one run — facts plus the added rows — mailed to the job's
+PIC. Sent by OWA via Playwright (no SMTP), only for a live run that added at
+least one row. A side channel: it never changes a run's status, and every
+attempt (sent / skipped / failed / dry_run) is recorded.
+_Avoid_: alert, email, message.

@@ -131,5 +131,21 @@
 - [x] 11.6 GUI — OS badge, Sync action, best-effort auto-sync
 - [x] 11.7 Docs — invariant 14, vocabulary, ledger, README
 
+## Phase 12 — Run notification email ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-15-run-notification-email-design.md`
+> Plan: `docs/superpowers/plans/2026-10-15-run-notification-email.md`
+> After any run that added rows, mail an HTML summary to the job's PIC list,
+> over OWA via Playwright (no SMTP) — the same approach as the `momo` tool.
+
+- [x] 12.1 `core/pic.py` — `;`-separated PIC list helpers
+- [x] 12.2 `core/owa_mailer.py` — Playwright/OWA transport (ported)
+- [x] 12.3 `core/state.py` — `notifications` table + accessors
+- [x] 12.4 `core/config.py` + `core/registry.py` — per-job `pic`
+- [x] 12.5 `core/notify.py` — trigger rules, HTML report, send
+- [x] 12.6 `core/sync.py` — notify after a run, contained
+- [x] 12.7 `cli.py` — `send-report`, `--no-notify`, report status
+- [x] 12.8 GUI — PIC field + per-run notification line
+- [x] 12.9 Docs — invariant 15, vocabulary, README, `[owa]` extra
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

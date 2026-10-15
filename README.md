@@ -103,3 +103,32 @@ Each task runs `stg-store-sync-cli run-due --job <name>`; `run-due` decides
 whether the job is actually due (the OS trigger is a coarse wake-up) and runs
 it add-only, honouring the job's configured dry-run. Credentials come from the
 project-root `.env` (resolved independently of the working directory).
+
+## Email notifications
+
+After a run that **added at least one row**, the job's PIC list is mailed an HTML
+summary (facts + the added rows). Dry-runs and clean (0-add) runs never mail, and
+a failed send never changes the run's status.
+
+```bash
+pip install -e ".[owa]"          # adds Playwright
+export STG_OWA_EMAIL=you@company.com   # the account OWA's picker should click
+```
+
+The browser is deliberately **not** headless — the first send opens a Playwright
+window; sign in to Outlook Web once and the session persists in
+`~/.stg_store_sync/playwright_profile_owa` (override with `STG_OWA_PROFILE_DIR`).
+No SMTP, no relay, no app password.
+
+Set the PIC list per job in the job detail's **Config** tab (a `;`-separated
+list; non-address entries are flagged but never block saving). Rehearse or
+re-send from the CLI:
+
+```bash
+stg-store-sync-cli send-report <name> --dry-run --out /tmp   # render only
+stg-store-sync-cli send-report <name> --force                # re-send
+stg-store-sync-cli run <name> --no-notify                    # skip the mail
+```
+
+`--no-notify` is also accepted by `run-all` and `run-due`. Every attempt —
+sent, skipped, failed or dry_run — is recorded and shown on the run detail page.
