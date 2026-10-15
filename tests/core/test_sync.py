@@ -541,3 +541,11 @@ class TestNotificationWiring:
         res = run_sync(config(dry_run=False), client=c, state=st)
         row = st.notification_for_run(res.run_id)
         assert row is not None and row["status"] == "skipped"
+
+
+class TestNotificationWiring:
+    def test_run_records_its_finish_time(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c, state=st)
+        assert res.finished_at
+        assert res.finished_at == st.get_run(res.run_id)["finished_at"]

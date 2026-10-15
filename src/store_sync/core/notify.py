@@ -99,9 +99,8 @@ def subject_line(job_cfg, result) -> str:
     reports: a subject reading only "3 rows added" is unactionable.
     """
     n = _add_count(result)
-    when = _run_when(result)
-    date = when.strftime("%d %b %Y") if when else ""
-    return f"[StoreSync] {job_cfg.job} — {n} row(s) added · {date}".strip(" ·")
+    when = _run_when(result) or datetime.now()
+    return f"[StoreSync] {job_cfg.job} — {n} row(s) added · {when.strftime('%d %b %Y')}"
 
 
 def _run_when(result) -> datetime | None:
@@ -231,17 +230,34 @@ def notify_run_report(
     force: bool = False,
     out_dir: str | Path | None = None,
     profile_dir: str | Path | None = None,
+    subject: str | None = None,
+    body_html: str | None = None,
 ) -> SendOutcome:
     """Mail one run's report, or record why it was not mailed.
 
     Never raises for a delivery problem: the run already succeeded and its
     results are stored; a broken mailbox must not turn that into a failed run.
     Every path records a ``notifications`` row, including the non-sends.
+
+    ``subject``/``body_html`` override the freshly rendered report; ``send-report``
+    passes the *stored* body so a re-send is byte-identical to the original even
+    though the run's payloads are long gone (spec §5.2).
     """
     run_id = result.run_id if result.run_id is not None else 0
     recipients, others = split_pic_emails(job_cfg.pic)
-    subject = subject_line(job_cfg, result)
-    html = render_report(job_cfg, result)
+    # Rendering runs outside `_decide`'s try, so contain it here: a render bug
+    # must still record a row rather than escape into `run_sync`.
+    try:
+        subject = subject or subject_line(job_cfg, result)
+        html = body_html if body_html is not None else render_report(job_cfg, result)
+    except Exception as exc:  # noqa: BLE001 — containment is the point
+        logger.exception("Run %s: report render failed", run_id)
+        outcome = SendOutcome("failed", reason=f"render failed: {exc}")
+        state.record_notification(
+            run_id, job=job_cfg.job, status=outcome.status,
+            reason=outcome.reason,
+        )
+        return outcome
 
     outcome = _decide(state, result, run_id, job_cfg, recipients, others, force,
                       subject, html, out_dir, profile_dir)
@@ -251,7 +267,10 @@ def notify_run_report(
         status=outcome.status,
         recipients=", ".join(outcome.to),
         subject=subject,
-        body_html=html,
+        # Only a genuine send keeps its body: a `skipped`/`dry_run` row has
+        # nothing to re-send, and a per-minute job would otherwise grow the DB
+        # without bound.
+        body_html=html if outcome.status == "sent" else "",
         reason=outcome.reason or None,
     )
     return outcome

@@ -503,7 +503,9 @@ class TestSendReport:
         path = tmp_path / "s.db"
         monkeypatch.setenv("STG_STORE_SYNC_DB", str(path))
         add_job(path, "link1")
-        assert cli.main(["send-report", "link1", "--dry-run"]) == 3
+        assert cli.main(
+            ["send-report", "link1", "--dry-run", "--out", str(tmp_path)]
+        ) == 3
 
     def test_send_report_force_is_passed_through(self, monkeypatch, db):
         seen = []
@@ -534,3 +536,28 @@ class TestNotifyFlag:
         monkeypatch.setattr(cli, "run_sync", lambda cfg, **kw: fake_result())
         cli.main(["run", "link1", "--json"])
         assert "report_status" in json.loads(capsys.readouterr().out)
+
+
+class TestSendReportFixes:
+    def test_dry_run_without_out_is_1(self, db, capsys):
+        assert cli.main(["send-report", "link1", "--dry-run"]) == 1
+        assert "--out" in capsys.readouterr().err
+
+    def test_resend_uses_the_stored_body(self, monkeypatch, db):
+        """A re-send must replay the stored mail, not re-render (spec §5.2)."""
+        sent = {}
+        monkeypatch.setattr(
+            cli, "notify_run_report",
+            lambda job, st, res, **kw: sent.update(kw) or _send_outcome("sent"),
+        )
+        st = State(db)
+        try:
+            st.record_notification(
+                1, job="link1", status="sent",
+                subject="stored subject", body_html="<p>stored body</p>",
+            )
+        finally:
+            st.close()
+        assert cli.main(["send-report", "link1", "--force"]) == 0
+        assert sent["subject"] == "stored subject"
+        assert sent["body_html"] == "<p>stored body</p>"

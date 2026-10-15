@@ -1,8 +1,11 @@
 """Headless entry point: registry-backed sync subcommands (spec §7).
 
     stg-store-sync-cli list
-    stg-store-sync-cli run <name> [--dry-run/--no-dry-run] [--json]
-    stg-store-sync-cli run-all [--enabled-only] [--json]
+    stg-store-sync-cli run <name> [--dry-run/--no-dry-run] [--no-notify] [--json]
+    stg-store-sync-cli run-all [--enabled-only] [--no-notify] [--json]
+    stg-store-sync-cli run-due [--job <name>] [--no-notify] [--json]
+    stg-store-sync-cli send-report <name> [--run-id N] [--dry-run --out DIR]
+                                  [--force] [--json]
     stg-store-sync-cli stop <name>
 
 The GUI is authoritative for stored config; the CLI reads the same SQLite
@@ -566,6 +569,10 @@ def _cmd_send_report(db: Path, args) -> int:
     finally:
         reg.close()
 
+    if args.dry_run and not args.out:
+        print("error: --dry-run requires --out DIR", file=sys.stderr)
+        return 1
+
     state = State(db)
     try:
         run = None
@@ -588,9 +595,17 @@ def _cmd_send_report(db: Path, args) -> int:
             status=run["status"] or "ok",
             counts=run["counts"] or {},
             run_id=run["id"],
+            finished_at=run.get("finished_at"),
         )
+        # A re-send uses the *stored* body so it is byte-identical to the
+        # original (spec §5.2) — the run's added rows are long gone.
+        stored = state.notification_for_run(run["id"]) or {}
         outcome = notify_run_report(
-            job, state, result, force=args.force, out_dir=args.out,
+            job, state, result,
+            force=args.force,
+            out_dir=args.out,
+            subject=stored.get("subject") or None,
+            body_html=stored.get("body_html") or None,
         )
         if args.json:
             print(json.dumps(

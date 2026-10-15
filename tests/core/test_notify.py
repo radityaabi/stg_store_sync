@@ -113,3 +113,44 @@ def test_notify_skip_reason_names_non_address_entries(monkeypatch, state):
     monkeypatch.setattr(notify, "_send", lambda **kw: pytest.fail("must not send"))
     out = notify.notify_run_report(a_job(pic="Budi"), state, a_result(adds=1))
     assert out.status == "skipped" and "Budi" in out.reason
+
+
+def test_render_uses_the_run_finish_time(monkeypatch, state):
+    from store_sync.core.timefmt import local_time
+
+    res = a_result(adds=1)
+    res.finished_at = "2026-10-15 03:04:05"
+    assert "15 Oct 2026" in notify.subject_line(a_job(), res)
+    assert local_time(res.finished_at) in notify.render_report(a_job(), res)
+
+
+def test_subject_falls_back_to_today_without_a_finish_time():
+    from datetime import datetime
+
+    res = a_result(adds=1)
+    res.finished_at = None
+    assert datetime.now().strftime("%d %b %Y") in notify.subject_line(a_job(), res)
+
+
+def test_notify_skipped_records_no_body(monkeypatch, state):
+    monkeypatch.setattr(notify, "_send", lambda **kw: pytest.fail("must not send"))
+    notify.notify_run_report(a_job(pic="a@x.com"), state, a_result(adds=0))
+    assert state.notification_for_run(1)["body_html"] == ""
+
+
+def test_notify_sent_records_the_body(monkeypatch, state):
+    monkeypatch.setattr(notify, "_send", lambda **kw: OwaOutcome("sent", ""))
+    notify.notify_run_report(a_job(pic="a@x.com"), state, a_result(adds=1))
+    assert "Rows added" in state.notification_for_run(1)["body_html"]
+
+
+def test_notify_accepts_a_stored_body_and_subject(monkeypatch, state):
+    """`send-report` re-sends the stored mail byte-for-byte (spec §5.2)."""
+    sent = {}
+    monkeypatch.setattr(notify, "_send",
+                        lambda **kw: sent.update(kw) or OwaOutcome("sent", ""))
+    notify.notify_run_report(
+        a_job(pic="a@x.com"), state, a_result(adds=1),
+        subject="S", body_html="<p>stored</p>",
+    )
+    assert sent["subject"] == "S" and sent["html"] == "<p>stored</p>"

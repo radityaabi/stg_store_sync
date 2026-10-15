@@ -65,6 +65,7 @@ class SyncResult:
     run_id: int | None = None
     proposals: int = 0  # update proposals recorded for operator review
     suppressed: int = 0  # blacklisted keys skipped (not re-added)
+    finished_at: str | None = None  # stored UTC finish stamp (report display)
 
 
 def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
@@ -136,9 +137,23 @@ def run_sync(
         should_stop=should_stop,
         progress=progress,
     )
+    _stamp_finished(res, state)
     if notify:
         _notify_safely(config, state, res, out_dir=notify_out_dir)
     return res
+
+
+def _stamp_finished(res, state) -> None:
+    """Copy the stored UTC finish stamp onto the result, for report display.
+
+    The notification renders *after* the run row is finished, and the run row is
+    the only place the finish time exists; reading it back keeps one source of
+    truth (and `send-report` reconstructs the same way).
+    """
+    if res.run_id is None or res.finished_at is not None:
+        return
+    row = state.get_run(res.run_id) or {}
+    res.finished_at = row.get("finished_at")
 
 
 def _notify_safely(config, state, res, *, out_dir=None) -> None:

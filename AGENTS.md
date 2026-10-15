@@ -14,7 +14,7 @@ default.**
 Standalone repo — **never import from `stg_automation_suite`** (or any sibling
 repo). Reference only.
 
-Status: core + GUI + CLI implemented; **489 tests green**; not yet enabled for a
+Status: core + GUI + CLI implemented; **533 tests green**; not yet enabled for a
 live write. See `tasks/todo.md` for the phase ledger.
 
 ## Stack & layout
@@ -33,7 +33,7 @@ live write. See `tasks/todo.md` for the phase ledger.
 - `tests/` mirrors `src/` (`tests/core`, `tests/ui`); 28 test modules.
 - Runtime state: SQLite at `~/.stg_store_sync/state.db` (override
   `STG_STORE_SYNC_DB`). Tables: `jobs`/`job_columns` (Registry),
-  `runs`/`conflicts`/`tracked` (State).
+  `runs`/`conflicts`/`tracked` (State), `notifications` (run-report attempts).
 
 ## Commands
 
