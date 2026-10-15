@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS os_fired (
     minute_key TEXT NOT NULL,
     PRIMARY KEY (job, minute_key)
 );
+CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     INTEGER NOT NULL,
+    job        TEXT    NOT NULL,
+    status     TEXT    NOT NULL,
+    recipients TEXT    NOT NULL DEFAULT '',
+    subject    TEXT    NOT NULL DEFAULT '',
+    body_html  TEXT    NOT NULL DEFAULT '',
+    reason     TEXT,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS notifications_run ON notifications(run_id);
 """
 
 
@@ -328,3 +340,45 @@ class State:
         )
         self.conn.commit()
         return cur.rowcount
+
+    # -- notifications -----------------------------------------------------
+
+    def record_notification(
+        self,
+        run_id: int,
+        *,
+        job: str,
+        status: str,
+        recipients: str = "",
+        subject: str = "",
+        body_html: str = "",
+        reason: str | None = None,
+    ) -> int:
+        """Record one notification attempt for a run; returns its row id.
+
+        Written for **every** attempt — sent, skipped, failed or dry_run — so the
+        GUI and an operator can see what happened (and why nothing was mailed).
+        """
+        cur = self.conn.execute(
+            "INSERT INTO notifications "
+            "(run_id, job, status, recipients, subject, body_html, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, job, status, recipients, subject, body_html, reason),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def notification_for_run(self, run_id: int) -> dict | None:
+        """The most recent notification for a run, or None when none exists."""
+        row = self.conn.execute(
+            "SELECT * FROM notifications WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def notifications_for_run(self, run_id: int) -> list[dict]:
+        """Every notification row for a run, oldest first."""
+        rows = self.conn.execute(
+            "SELECT * FROM notifications WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]

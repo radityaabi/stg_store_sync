@@ -216,3 +216,23 @@ class TestOsFired:
         removed = st.prune_os_fired("2026-10-12T00:00")
         assert removed == 1
         assert st.claim_due("j", "2026-10-11T00:00") is True  # pruned → reclaimable
+
+class TestNotifications:
+    def test_record_notification_round_trips(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        nid = st.record_notification(rid, job="j", status="sent",
+                                     recipients="a@x.com", subject="S", body_html="<p>")
+        assert nid > 0
+        row = st.notification_for_run(rid)
+        assert row["status"] == "sent" and row["recipients"] == "a@x.com"
+
+    def test_notification_for_run_returns_most_recent(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        st.record_notification(rid, job="j", status="skipped", reason="no adds")
+        st.record_notification(rid, job="j", status="sent")
+        assert st.notification_for_run(rid)["status"] == "sent"
+        assert [r["status"] for r in st.notifications_for_run(rid)] == ["skipped", "sent"]
+
+    def test_notification_for_run_is_none_when_absent(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        assert st.notification_for_run(rid) is None
