@@ -409,6 +409,12 @@ scheduled runs surface the same review queue in the GUI. `dry_run: true` is the
 **default**; no write happens until the operator confirms (a dry run records no
 applied state and no proposals).
 
+> **One pending proposal per key (2026-10-16):** a later run that re-proposes a
+> key **supersedes** the earlier still-pending row (`status='superseded'`) before
+> inserting the fresh one, so the queue shows each key once — at its latest
+> `old → new` — instead of one row per run. `applied`/`stale`/`dismissed` rows
+> are untouched; superseded rows stay in the DB as history.
+
 Write execution: **one request per row** (`AddRow`; `UpdateRow` only on an
 approved proposal), throttled, with retry.
 

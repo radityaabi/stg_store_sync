@@ -71,7 +71,10 @@ Violating any of these corrupts production data or the safety model:
 2. **Empty source value = `""`, always written — never skipped.** A configured
    var absent from the export is empty, not "leave untouched".
 3. **Automation writes ADD only.** An `update` is a **proposal** recorded for
-   operator review; it is never written by a run. Delete does not exist — the
+   operator review; it is never written by a run. At most **one pending proposal
+   per match key**: a later run re-proposing a key marks the earlier pending row
+   `superseded` before inserting the fresh one, so the queue shows each key once,
+   at its latest diff. Delete does not exist — the
    tool never calls `DeleteRow`, and store rows absent from a pull are left
    untouched (a short/failed pull must never imply deletion).
 4. **Update application is compare-and-swap.** `writer.apply_updates` re-reads

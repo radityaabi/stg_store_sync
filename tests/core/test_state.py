@@ -131,6 +131,35 @@ class TestProposals:
         self._record(st, run_id=rid)
         assert len(st.proposals_for_run(rid)) == 1
 
+    def test_recording_same_key_supersedes_previous_pending(self, st):
+        # A later run re-proposing the same key must leave exactly one pending
+        # row (the freshest), so the GUI never shows the same id twice.
+        r1 = st.start_run(job="j", dry_run=False)
+        old = self._record(st, run_id=r1, id_value=2)
+        r2 = st.start_run(job="j", dry_run=False)
+        new = st.record_proposal(
+            r2, job="j", match_value="102", id_value=2,
+            payload={"No": 2, "SbjNum": "102", "Q32": "77"},
+            diff=[{"col": "Q32", "old": "22", "new": "77"}],
+        )
+        pending = st.pending_proposals("j")
+        assert len(pending) == 1
+        assert pending[0]["id"] == new
+        assert pending[0]["diff"] == [{"col": "Q32", "old": "22", "new": "77"}]
+        assert st.get_proposal(old)["status"] == "superseded"
+
+    def test_superseding_keeps_other_keys_and_decided_rows(self, st):
+        rid = st.start_run(job="j", dry_run=False)
+        other = self._record(st, run_id=rid, match="999", id_value=9)
+        decided = self._record(st, run_id=rid, match="888", id_value=8)
+        st.set_proposal_status(decided, "applied")
+        self._record(st, run_id=rid)  # "102"
+        self._record(st, run_id=rid)  # "102" again → supersedes the first
+        pending = [p["match_value"] for p in st.pending_proposals("j")]
+        assert sorted(pending) == ["102", "999"]
+        assert st.get_proposal(other)["status"] == "pending"
+        assert st.get_proposal(decided)["status"] == "applied"
+
 
 class TestBlacklist:
     def test_add_list_and_remove(self, st):

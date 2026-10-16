@@ -212,7 +212,19 @@ class State:
         payload: dict,
         diff: list,
     ) -> int:
-        """Record a pending update proposal (an `update` action's diff)."""
+        """Record a pending update proposal (an `update` action's diff).
+
+        A newer proposal for a key **supersedes** any still-pending proposal for
+        the same `(job, match_value)`: the previous row is marked `superseded`
+        before the fresh one is inserted, so the review queue holds exactly one
+        pending proposal per key (the freshest) instead of one per run. Decided
+        rows (`applied`/`stale`/`dismissed`) are left untouched.
+        """
+        self.conn.execute(
+            "UPDATE proposals SET status = 'superseded', decided_at = datetime('now') "
+            "WHERE job = ? AND match_value = ? AND status = 'pending'",
+            (job, str(match_value)),
+        )
         cur = self.conn.execute(
             "INSERT INTO proposals (run_id, job, match_value, id_value, payload, diff) "
             "VALUES (?, ?, ?, ?, ?, ?)",

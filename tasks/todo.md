@@ -147,5 +147,15 @@
 - [x] 12.8 GUI — PIC field + per-run notification line
 - [x] 12.9 Docs — invariant 15, vocabulary, README, `[owa]` extra
 
+## Phase 13 — One pending proposal per key ✅ COMPLETE
+> A later run re-proposing a key **supersedes** the earlier still-pending row
+> (`status='superseded'`) instead of inserting a duplicate, so the GUI queue
+> shows each key once — at its latest `old → new`. Fixes repeated/duplicated
+> rows in the Proposed-updates tab across runs.
+
+- [x] 13.1 `core/state.py` — `record_proposal` supersedes prior pending rows for the key
+- [x] 13.2 Tests — `test_state.py` supersede cases; suite green (532)
+- [x] 13.3 Docs — invariant 3, base-spec §6 note, `CONTEXT.md` vocabulary
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

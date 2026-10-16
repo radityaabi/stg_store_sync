@@ -111,7 +111,10 @@ _Avoid_: full sync.
 **Update proposal**:
 A pending, operator-reviewed change to an existing store row. Created only when
 at least one mapped column differs byte-for-byte; carries the per-column
-`old → new` diffs. Never written until the operator applies it.
+`old → new` diffs. Never written until the operator applies it. At most **one
+pending proposal exists per match key**: a later run re-proposing a key
+**supersedes** the earlier pending row (status `superseded`), so the queue shows
+the freshest state rather than one row per run.
 _Avoid_: pending update, diff.
 
 **Apply selected**:
@@ -123,6 +126,11 @@ _Avoid_: commit, confirm.
 A proposal whose store row changed after the proposal was computed; it is skipped
 and reported rather than overwriting the manual revision.
 _Avoid_: outdated, conflicted.
+
+**Superseded proposal**:
+A pending proposal replaced by a newer one for the same match key. It leaves the
+review queue (status `superseded`) but is kept in the DB as history.
+_Avoid_: replaced, dropped.
 
 **Conflict**:
 An ambiguity that blocks or skips a row rather than guessing — a match key
