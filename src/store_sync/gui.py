@@ -209,6 +209,9 @@ class Controller:
         self._started = False
         self._stopped = False
         self._active_prev: str | None = None
+        # Per-job live progress buffers: `{job: [event, ...]}`. The open job's
+        # detail panel replays its own buffer; another job's run never bleeds in.
+        self._progress_by_job: dict[str, list[dict]] = {}
 
         # In-flight off-thread network workers (pairing / mapping pool). The
         # `_pair_thread`/`_mapping_thread` attrs are "the current worker for
@@ -495,24 +498,36 @@ class Controller:
         self._progress_bridge.changed.emit(event)
 
     def _on_run_progress(self, event: dict) -> None:
-        """Render one run stage in the open job's timeline (GUI thread)."""
-        if self._detail_name:
+        """Buffer one run event per job, and render only the open job's log.
+
+        Events are keyed by their `job` (missing → the open job, for old
+        callers/tests). A job's buffer is reset on its `start`; the panel shows
+        only the open job's buffer, so job A's run never bleeds into job B's
+        panel. The header status mirrors the stage (prefixed with the job) so
+        progress is visible while another page is in front.
+        """
+        job = event.get("job") or self._detail_name or ""
+        stage = event.get("stage", "")
+        buf = self._progress_by_job.setdefault(job, [])
+        if stage == "start":
+            buf.clear()
+        buf.append(event)
+        if self._detail_name and job == self._detail_name:
             self.window.job_detail.set_run_progress(event)
         # Mirror the stage into the header status so the operator sees progress
         # even while another page (dashboard) is in front.
-        stage = event.get("stage", "")
+        prefix = f"{job} · " if job else ""
         if stage == "done":
             status = event.get("status") or "?"
             color = _STATUS_OK if status == "ok" else _STATUS_FAIL
-            self.window.set_status(f"run {status}", color)
+            self.window.set_status(f"{prefix}run {status}", color)
         elif stage == "start":
-            job = event.get("job", "")
             dry = " (dry run)" if event.get("dry_run") else ""
-            self.window.set_status(f"running {job}{dry}", _STATUS_WARN)
+            self.window.set_status(f"running {job}{dry}".strip(), _STATUS_WARN)
         else:
             line = _progress_line(event).lstrip("· ").strip()
             if line:
-                self.window.set_status(line, _STATUS_WARN)
+                self.window.set_status(f"{prefix}{line}", _STATUS_WARN)
 
     def _on_queue_changed(self, state) -> None:
         self.window.dashboard.set_queue(state.active, state.pending)
@@ -639,6 +654,7 @@ class Controller:
         )
         self.window.job_detail.load(entry, job)
         self._load_history(name)
+        self._replay_progress(name)
         self.window.show_job(name)
 
     def _open_job(self, name: str) -> None:
@@ -652,7 +668,19 @@ class Controller:
         self._detail_name = name
         self.window.job_detail.load(entry, job)
         self._load_history(name)
+        self._replay_progress(name)
         self.window.show_job(name)
+
+    def _replay_progress(self, name: str | None) -> None:
+        """Show the open job's buffered live log (empty/hidden when none).
+
+        Switching jobs must never show another job's log, so the panel is
+        always reset from *this* job's buffer — even when that buffer is empty.
+        """
+        detail = self.window.job_detail
+        detail.clear_run_progress()
+        for event in self._progress_by_job.get(name or "", []):
+            detail.set_run_progress(event)
 
     def _load_history(self, name: str | None) -> None:
         """Fill the open job's History + Conflicts tabs from `State`."""

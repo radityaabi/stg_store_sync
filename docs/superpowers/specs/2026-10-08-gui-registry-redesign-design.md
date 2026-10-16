@@ -259,6 +259,17 @@ event `{"stage": "add", "done": n, "total": N}`, where `N` is the number of
 planned adds. The GUI renders one line, updated **in place**, so a large write
 shows a single climbing `adding rows: n/N` line rather than one line per row.
 
+### 5.2.2 Per-job progress logs
+
+Every progress event carries its `job`. The controller keeps one in-memory
+buffer per job and renders **only the open job's** buffer into the detail panel,
+so a run of job A never bleeds into job B's log (and the two can't be confused).
+Opening a job replays its buffer — a job that is mid-run shows its log so far;
+a job with none shows an empty, hidden panel. Buffers are per-session
+(in-memory) and reset on each run's `start`. The header status line is prefixed
+with the job name (`<job> · <stage>`) so the single global line stays
+unambiguous while another page is in front.
+
 ### 5.3 Scheduler (`core/scheduler.py`) — superseded (interval model)
 
 > **Superseded** by

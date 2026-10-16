@@ -156,6 +156,9 @@ def _run_sync_inner(
 
     def _emit(stage: str, **payload) -> None:
         if progress is not None:
+            # Every event carries its job so the GUI can keep one log per job
+            # and never render job A's run into job B's panel.
+            payload.setdefault("job", config.job)
             try:
                 progress({"stage": stage, **payload})
             except Exception:  # noqa: BLE001 - progress must never break a run

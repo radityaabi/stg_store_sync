@@ -345,6 +345,60 @@ def test_run_progress_updates_header_status(tmp_path):
     w.close()
 
 
+def test_progress_does_not_bleed_across_jobs(tmp_path):
+    """Job A's run must not render into job B's open detail panel."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c.save("b", a_job("b"), schedule=Schedule(""), enabled=False)
+    c._open_job("b")
+    assert w.job_detail.progress_panel.isHidden()
+    c._on_run_progress({"stage": "start", "job": "a", "dry_run": False})
+    c._on_run_progress({"stage": "ids", "job": "a", "total": 296})
+    QCoreApplication.processEvents()
+    # B is open and idle → A's events must not fill B's panel.
+    assert w.job_detail.progress_panel.isHidden()
+    assert w.job_detail.progress_text.toPlainText() == ""
+    c.stop()
+    w.close()
+
+
+def test_open_running_job_replays_its_buffered_log(tmp_path):
+    """Opening a job that is mid-run shows the events already emitted for it."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c._on_run_progress({"stage": "start", "job": "a", "dry_run": False})
+    c._on_run_progress({"stage": "ids", "job": "a", "total": 296})
+    c._on_run_progress({"stage": "pull", "job": "a", "total": 296})
+    QCoreApplication.processEvents()
+    c._open_job("a")
+    QCoreApplication.processEvents()
+    text = w.job_detail.progress_text.toPlainText()
+    assert "296" in text
+    assert not w.job_detail.progress_panel.isHidden()
+    c.stop()
+    w.close()
+
+
+def test_open_idle_job_clears_stale_progress(tmp_path):
+    """Opening a job with no buffered events shows an empty (hidden) panel."""
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c.save("b", a_job("b"), schedule=Schedule(""), enabled=False)
+    c._open_job("a")
+    c._on_run_progress({"stage": "start", "job": "a", "dry_run": False})
+    c._on_run_progress({"stage": "ids", "job": "a", "total": 296})
+    QCoreApplication.processEvents()
+    c._open_job("b")
+    QCoreApplication.processEvents()
+    assert w.job_detail.progress_text.toPlainText() == ""
+    assert w.job_detail.progress_panel.isHidden()
+    c.stop()
+    w.close()
+
+
 def test_open_job_fills_history_and_conflicts(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)

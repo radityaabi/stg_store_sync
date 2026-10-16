@@ -311,13 +311,23 @@ class TestProgress:
             throttle=0, backoff=0, progress=events.append,
         )
         adds = [e for e in events if e["stage"] == "add"]
-        assert adds == [{"stage": "add", "done": 1, "total": 1}]
+        assert adds == [{"stage": "add", "done": 1, "total": 1, "job": "link1"}]
 
     def test_dry_run_emits_no_add_progress(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         events = []
         run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
         assert [e for e in events if e["stage"] == "add"] == []
+
+    def test_every_event_is_tagged_with_the_job(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(
+            config(dry_run=False), client=c, state=st,
+            throttle=0, backoff=0, progress=events.append,
+        )
+        assert events and all(e.get("job") == "link1" for e in events)
+        assert events[0]["stage"] == "start"
 
     def test_cancelled_run_status_and_tracking(self, st):
         subs = subjects() + [

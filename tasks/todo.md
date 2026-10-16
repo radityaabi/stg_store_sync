@@ -180,5 +180,17 @@
 - [x] 15.4 Tests — writer callback, sync event, in-place UI line (551 green)
 - [x] 15.5 Docs — GUI redesign spec §5.2.1
 
+## Phase 16 — Per-job run log ✅ COMPLETE
+> The live run log is now per job: each progress event is tagged with its job,
+> the controller buffers one log per job, and only the open job's log renders.
+> Job A's run never bleeds into job B's panel; opening a running job replays its
+> log. Header status is prefixed with the job name.
+
+- [x] 16.1 `core/sync.py` — tag every progress event with `job`
+- [x] 16.2 `gui.py` — per-job progress buffer; render only the open job's log
+- [x] 16.3 `gui.py` — `_replay_progress` on open/new; header prefixed with job
+- [x] 16.4 Tests — event tagging, no cross-job bleed, replay, idle clears (555 green)
+- [x] 16.5 Docs — GUI redesign spec §5.2.2
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming
