@@ -2,7 +2,7 @@
 
     cached survey index -> derive pull terms -> pull (filter/fallback)
     store GetStore -> plan (diff by match key)
-    writer.apply (adds only; or dry-run) -> record update proposals
+    id-column no-op probe (live adds only) -> writer.apply (adds only) -> proposals
     state.record_run
 
 The `state` run row and conflicts are written regardless of dry-run, so the GUI
@@ -17,8 +17,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from store_sync.core.binding import noop_probe
 from store_sync.core.config import JobConfig
-from store_sync.core.fetcher import derive_pull_terms, pull
+from store_sync.core.fetcher import pull
 from store_sync.core.notify import notify_run_report
 from store_sync.core.planner import Plan, _s, plan
 from store_sync.core.preflight import _pairing_errors, preflight
@@ -31,11 +32,10 @@ logger = logging.getLogger(__name__)
 def _readiness_errors(config, store_rows, source_records) -> list[str]:
     """Full preflight parity for the in-run fail-closed gate (spec §3.3/§4.4).
 
-    The CLI never calls `run_preflight` (that would double-fetch), so this gate
-    is its entire safety story. It must therefore evaluate the *same* error set
-    as `preflight`, reusing the already-fetched store snapshot and pulled source
-    records. `client=None` suppresses the write-probing no-op — this path must
-    never probe.
+    The CLI never runs a separate preflight pass (that would double-fetch), so
+    this gate is its entire safety story. It must therefore evaluate the *same*
+    error set as `preflight`, reusing the already-fetched store snapshot and
+    pulled source records.
 
     One deliberate exception: `preflight` also flags a match key non-unique *in
     the pull*. Spec §3.2 says source-side duplicates are **skipped** (status
@@ -46,7 +46,6 @@ def _readiness_errors(config, store_rows, source_records) -> list[str]:
         store_rows=store_rows,
         source_records=source_records,
         config=config,
-        client=None,
     )
     m = config.binding.match
     source_dup = (
@@ -66,46 +65,6 @@ class SyncResult:
     proposals: int = 0  # update proposals recorded for operator review
     suppressed: int = 0  # blacklisted keys skipped (not re-added)
     finished_at: str | None = None  # stored UTC finish stamp (report display)
-
-
-def run_preflight(config: JobConfig, *, client, sample_size: int = 50):
-    """Fetch a store snapshot + a small pull sample and run the binding gate.
-
-    Returns `(report, pull_terms)` where `pull_terms` maps `source_var → base`
-    for the GUI's read-only pull-term column. The survey index comes from the
-    cached `config.source.survey_index`; the survey XML is never fetched here.
-    """
-    index = dict(config.source.survey_index)
-    columns = config.binding.columns
-    terms, _ = derive_pull_terms(
-        [c.source_var for c in columns],
-        index,
-        match_var=config.binding.match.source_var if config.binding.match else None,
-    )
-    _ = terms  # terms reserved for the preflight review message
-
-    store_rows = client.get_store(config.store.id)
-    ids = client.survey_interview_ids(config.source.survey_id)[:sample_size]
-    pulled = pull(
-        client,
-        config.source.survey_id,
-        ids,
-        source_vars=[c.source_var for c in columns],
-        match_var=config.binding.match.source_var if config.binding.match else None,
-        survey_index=index,
-    )
-
-    report = preflight(
-        store_rows=store_rows,
-        source_records=pulled.records,
-        config=config,
-        client=client,
-        store_id=config.store.id,
-    )
-    pull_terms = {
-        c.source_var: index.get(c.source_var, "") for c in columns
-    }
-    return report, pull_terms
 
 
 def run_sync(
@@ -330,6 +289,26 @@ def _run_sync_inner(
         skipped_source = any(
             a.kind == "conflict" and a.side == "source" for a in p.actions
         )
+
+        # 4c) id-column verification probe (spec §4.2.1) ----------------------
+        # A live run with at least one add re-writes one store row unchanged to
+        # prove the declared id column really is the store's key: a wrong
+        # declaration answers `500 id column data not found`. The probe is a
+        # no-op (identical payload), so it is exempt from the dry-run guard —
+        # but a dry-run must stay a pure simulation and never touches the store.
+        if not dry_run and any(a.kind == "add" for a in p.actions):
+            probe = noop_probe(client, config.store.id, store_rows[0])
+            if not probe.ok:
+                msg = f"id-column probe failed: {probe.message}"
+                state.record_conflict(run_id, match_value=None, reason=msg)
+                _finish("blocked", {})
+                _emit("done", status="blocked", counts={}, dry_run=dry_run,
+                      suppressed=len(p.suppressed))
+                return SyncResult(
+                    plan=p, dry_run=dry_run, status="blocked", counts={},
+                    errors=[msg], run_id=run_id,
+                    suppressed=len(p.suppressed),
+                )
 
         # 5) apply adds (updates are proposals, never auto-written) ----------
         todo_kinds = [a.kind for a in p.actions if a.kind == "add"]

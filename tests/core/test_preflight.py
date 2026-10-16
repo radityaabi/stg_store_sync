@@ -2,6 +2,7 @@
 
 Combines the binding checks (id column, match key, strict) with a per-column
 review table over live store rows and a sample of flattened source records.
+Read-only: the id-column no-op probe lives on the run path (`sync`), not here.
 """
 from __future__ import annotations
 
@@ -72,18 +73,6 @@ def minimal_config():
         ),
         write=WriteConfig(),
     )
-
-
-class FakeClient:
-    def __init__(self, error=None):
-        self.error = error
-        self.calls = []
-
-    def update_row(self, store_id, values):
-        self.calls.append((store_id, dict(values)))
-        if self.error:
-            raise self.error
-        return {"Done": True}
 
 
 class TestTable:
@@ -240,37 +229,3 @@ class TestStrict:
         )
         assert rep.strict_violations == []
         assert rep.ok is True
-
-
-class TestProbe:
-    def test_probe_runs_when_client_given(self):
-        c = FakeClient()
-        rep = preflight(
-            store_rows=store_rows(),
-            source_records=source_records(),
-            config=make_config(),
-            client=c,
-            store_id=17417,
-        )
-        assert rep.probe is not None and rep.probe.ok is True
-        assert len(c.calls) == 1
-
-    def test_probe_failure_blocks(self):
-        from store_sync.core.stg_client import STGError
-
-        c = FakeClient(STGError("HTTP 500: Error: id column data not found"))
-        rep = preflight(
-            store_rows=store_rows(),
-            source_records=source_records(),
-            config=make_config(),
-            client=c,
-            store_id=17417,
-        )
-        assert rep.probe.ok is False
-        assert rep.ok is False
-
-    def test_no_probe_without_client(self):
-        rep = preflight(
-            store_rows=store_rows(), source_records=source_records(), config=make_config()
-        )
-        assert rep.probe is None

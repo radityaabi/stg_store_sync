@@ -1,7 +1,7 @@
 """Non-blocking toast notifications (top-right overlay on the main window).
 
 `set_status` only recolors the tiny header status dot — terminal events
-(save ok, import rejected, preflight blocked, …) were easy to miss. A toast
+(save ok, import rejected, blocked, …) were easy to miss. A toast
 gives the operator a visible, colour-coded confirmation that auto-dismisses.
 
 Styling follows DESIGN.md via object names only (`ToastOk`/`ToastWarn`/

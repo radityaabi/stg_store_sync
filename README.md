@@ -21,6 +21,9 @@ the STG REST API.
 - **Pairing**: a job must be paired in the **Columns** tab (the 🔗 action) before
   its first run; pairing reads the survey definition once and caches the pull
   terms. An unpaired job is blocked.
+- **Readiness is checked behind the scenes** on every run (store/pull sanity,
+  id-column check, match-key uniqueness) before any write — there is no separate
+  "run preflight" button. To preview without writing, use dry-run (the default).
 - GUI with a **Sync** button; dry-run is the default.
 
 ## Status

@@ -42,8 +42,6 @@ def test_proxy_signals_relay():
         "edit_requested",
         "delete_requested",
         "save_requested",
-        "preflight_requested",
-        "approve_requested",
         "import_requested",
         "export_requested",
         "refresh_requested",
@@ -64,8 +62,6 @@ def test_proxy_signals_relay():
     w.show_job("j1")
     w.job_detail.back.emit()
     w.job_detail.save_requested.emit()
-    w.job_detail.preflight_requested.emit()
-    w.job_detail.approve_requested.emit()
     w.job_detail.run_requested.emit()
     w.job_detail.stop_requested.emit()
     w.job_detail.import_requested.emit()
@@ -81,8 +77,6 @@ def test_proxy_signals_relay():
     assert seen["refresh_requested"] == [()]
     assert seen["back"] == [(), ()]  # job detail + run detail
     assert seen["save_requested"] == [()]
-    assert seen["preflight_requested"] == [()]
-    assert seen["approve_requested"] == [()]
     assert seen["import_requested"] == [()]
     assert seen["export_requested"] == [()]
     w.close()

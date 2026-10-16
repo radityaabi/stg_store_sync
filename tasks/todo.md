@@ -26,7 +26,7 @@
 
 ## Phase 2 — Binding gate
 - [x] 2.1 `core/binding.py` — alias pairs + `strict` + auto-suggest + match-key test + id-column declaration check (exists/uniqueness/no-op probe)
-- [x] 2.2 Preflight orchestration — review table from live store + sample export + id-column check
+- [x] 2.2 Readiness gate — per-column review + id-column check + match-key test over live store + pull
 
 ## Checkpoint: Binding
 - [x] alias pairs human-approved; `strict` blocks on mismatch; id column verified
@@ -49,7 +49,7 @@
 - [ ] Human review before enabling full sync
 
 ## Phase 5 — GUI
-- [x] 5.1 `ui/main_window.py` — jobs, binding editor (2 fields; pull term derived read-only), preflight, Approve dialog, Sync, dry-run, log, conflicts
+- [x] 5.1 `ui/main_window.py` — jobs, binding editor (2 fields; pull term derived read-only), Sync, dry-run, log, conflicts
 - [x] 5.2 `ui/mapping_io.py` — Excel template download + upload/validate the column mapping
 
 ## Checkpoint: GUI
@@ -99,7 +99,7 @@
 - [x] 9.2 `core/registry.py` — persist pairing fields + migrate legacy rows
 - [x] 9.3 `core/fetcher.py` — `pair_columns` helper from a cached index
 - [x] 9.4 `core/sync.py` — `run_sync` reads the cached index, drops the XML fetch, adds the pairing gate
-- [x] 9.5 `core/sync.py` — `run_preflight` uses the cached index + unpaired error
+- [x] 9.5 `core/sync.py` — readiness gate reuses the cached index + unpaired error (no separate preflight pass)
 - [x] 9.6 `ui/job_table_model.py` + `ui/job_detail.py` — stored pull term + Pairing button
 - [x] 9.7 `gui.py` + `ui/main_window.py` — pairing worker, wiring, carry pairing on save
 - [x] 9.8 Docs (invariants, vocabulary, README, ledger) + full acceptance

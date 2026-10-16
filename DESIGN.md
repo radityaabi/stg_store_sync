@@ -342,7 +342,7 @@ scroll off-screen.
 `QTableView` (stretch), with the toolbar in the action rail.
 
 **Store detail** is a `QTabWidget`: *Config · Columns · Schedule · History ·
-Conflicts*.
+Conflicts · Blacklist · Proposed updates*.
 
 ## Elevation & Depth
 
@@ -399,8 +399,6 @@ Rounded corners are modest:
   | Refresh | 🔄 | `"🔄 Refresh"` |
   | Schedule | ⏰ | `"⏰ Schedules"` |
   | Back | ← | `"← Back"` |
-  | Preflight / Check | ✔ | `"✔ Run preflight"` |
-
   Navigation keeps its existing arrow convention (`"← Back"`) — don't double up
   with a verb icon too.
 - **text-input**: `QLineEdit` / `QTextEdit` — white surface, light border, 6px

@@ -15,9 +15,9 @@ same `run_sync` path. Credentials come from `.env`
 same job racing, and every run is recorded in the SQLite state (audit log).
 
 Exit codes (spec §7): `0` ok · `2` blocked (preflight) · `3` partial/error ·
-`1` usage. The §3.3 readiness gate lives inside `run_sync` (before any write) and
-surfaces as `status == "blocked"`; the CLI does not call `run_preflight`
-separately.
+`1` usage. The §3.3 readiness gate (plus the §4.2.1 id-column probe on live
+adds) lives inside `run_sync` before any write and surfaces as
+`status == "blocked"`.
 """
 from __future__ import annotations
 

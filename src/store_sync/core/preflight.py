@@ -6,11 +6,13 @@ sample of flattened source records, and produces:
 * a per-column **review table** (store col · source var · overlap · status),
 * the **id-column** declaration check (exists / unique),
 * the **match-key** uniqueness check (store and source),
-* `strict` mode violations,
-* an optional **no-op id-column probe** when a client is supplied.
+* `strict` mode violations.
 
-`PreflightReport.ok` is the gate: nothing may write unless it is True and the
-operator has approved the binding (spec §5).
+Read-only: it builds a report from data the caller has already fetched. The
+id-column **no-op probe** (a verification write) lives on the run path
+(`sync._run_sync_inner`), not here.
+
+`PreflightReport.ok` is the gate: nothing may write unless it is True (spec §5).
 """
 from __future__ import annotations
 
@@ -19,11 +21,9 @@ from dataclasses import dataclass, field
 from store_sync.core.binding import (
     ColumnSuggestion,
     KeyCheck,
-    ProbeResult,
     _normalize,
     check_id_column,
     check_match_key,
-    noop_probe,
     strict_violations,
     suggest_aliases,
 )
@@ -72,7 +72,6 @@ class PreflightReport:
     match_store: KeyCheck = field(default_factory=KeyCheck)
     match_source: KeyCheck = field(default_factory=KeyCheck)
     strict_violations: list[str] = field(default_factory=list)
-    probe: ProbeResult | None = None
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -85,8 +84,6 @@ def preflight(
     store_rows: list[dict],
     source_records: list[dict],
     config: JobConfig,
-    client=None,
-    store_id=None,
 ) -> PreflightReport:
     rep = PreflightReport()
 
@@ -213,13 +210,6 @@ def preflight(
     if config.binding.mode == "strict":
         rep.strict_violations = strict_violations(configured)
         rep.errors.extend(rep.strict_violations)
-
-    # no-op id-column probe (only when a client is supplied) -----------------
-    if client is not None:
-        row = store_rows[0] if store_rows else None
-        rep.probe = noop_probe(client, store_id or config.store.id, row)
-        if not rep.probe.ok:
-            rep.errors.append(f"id-column probe failed: {rep.probe.message}")
 
     # pairing gate (fail closed: unpaired / stale / empty pull_term) ---------
     rep.errors.extend(_pairing_errors(config))

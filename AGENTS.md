@@ -89,7 +89,9 @@ Violating any of these corrupts production data or the safety model:
 9. **The id value is immutable on update**; adds assign `max(id_column)+1`.
 10. **One global run queue** — exactly one sync at a time; never run two.
 11. **Headless = add-only.** CLI/scheduler runs write adds and record proposals;
-    they never apply updates.
+    they never apply updates. (The id-column **no-op probe** is exempt: it
+    re-writes one row *unchanged* to verify the declared id column, and runs on
+    any live run that has at least one add — never on a dry-run.)
 12. **The survey definition is read only by the Pairing action (prep), never
     during a run.** A job with no pairing — empty `survey_index`,
     `paired_survey_id != survey_id`, or any empty `pull_term` — is `blocked`

@@ -1,8 +1,9 @@
 """Store-detail pane: tabbed job editor (Config · Columns · Schedule · History ·
-Conflicts) with a model-bound binding grid and a bottom action rail.
+Conflicts · Blacklist · Proposed updates) with a model-bound binding grid and a
+bottom action rail.
 
 Pure view: it holds a `JobTableModel` for the binding grid plus `_DictTableModel`
-instances for history / preflight / conflicts, and emits intent signals. It never
+instances for history / conflicts, and emits intent signals. It never
 touches the registry or the network — the controller wires the signals in.
 
 Style follows `stg_automation_suite/DESIGN.md`: rounded group frames, dark
@@ -47,8 +48,6 @@ class JobDetail(QWidget):
 
     back = Signal()
     save_requested = Signal()
-    preflight_requested = Signal()
-    approve_requested = Signal()
     run_requested = Signal()
     stop_requested = Signal()
     import_requested = Signal()
@@ -73,10 +72,6 @@ class JobDetail(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        # Preflight results have no dedicated tab (the controller surfaces them
-        # inline); keep the model so `set_preflight` has somewhere to land.
-        self.preflight_model = _DictTableModel(["column", "status", "detail"], self)
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("WorkspaceTabs")
@@ -383,12 +378,6 @@ class JobDetail(QWidget):
 
         self.back_button = QPushButton("← Back")
         self.back_button.clicked.connect(self.back.emit)
-        self.preflight_button = QPushButton("✔ Run preflight")
-        self.preflight_button.setObjectName("btn_warning")
-        self.preflight_button.clicked.connect(self.preflight_requested.emit)
-        self.approve_button = QPushButton("▶ Approve binding")
-        self.approve_button.setObjectName("btn_success")
-        self.approve_button.clicked.connect(self.approve)
         self.save_button = QPushButton("💾 Save")
         self.save_button.setObjectName("btn_primary")
         self.save_button.clicked.connect(self.save_requested.emit)
@@ -401,8 +390,6 @@ class JobDetail(QWidget):
 
         lay.addWidget(self.back_button)
         lay.addStretch(1)
-        lay.addWidget(self.preflight_button)
-        lay.addWidget(self.approve_button)
         lay.addWidget(self.save_button)
         lay.addWidget(self.run_button)
         lay.addWidget(self.stop_button)
@@ -450,9 +437,6 @@ class JobDetail(QWidget):
         self.history_model.set_rows(rows)
         self._history_ids = [r.get("id") for r in rows]
 
-    def set_preflight(self, rows: list[dict]) -> None:
-        self.preflight_model.set_rows(rows)
-
     def set_conflicts(self, rows: list[dict]) -> None:
         self.conflicts_model.set_rows(rows)
 
@@ -491,10 +475,6 @@ class JobDetail(QWidget):
         self._progress_lines = []
         self.progress_text.setPlainText("")
         self.progress_panel.hide()
-
-    def approve(self) -> None:
-        self.enabled_check.setChecked(True)
-        self.approve_requested.emit()
 
     def config_fields(self) -> dict:
         return {

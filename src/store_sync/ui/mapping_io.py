@@ -3,7 +3,7 @@
 The operator downloads a template (store columns pre-filled) and fills the
 source-variable column. Import validates everything before it reaches a job:
 unknown store columns / source vars, duplicates, and a bad header row are all
-rejected with a report. A valid import still goes through Approve binding.
+rejected with a report. A valid import is persisted through the normal Save path.
 """
 from __future__ import annotations
 
@@ -57,7 +57,8 @@ def parse_mapping(
 
     `valid_source_vars=None` skips source-var validation: the var list comes
     from the survey XML (a 30 s+ download), so the fast import path defers it
-    to preflight, which validates `source_var` presence against a live pull.
+    to the run's readiness gate, which validates `source_var` presence against a
+    live pull before any write.
     An empty list (not None) still validates and rejects everything.
 
     `id_column` names the store's id/tag column. Its row legitimately has no

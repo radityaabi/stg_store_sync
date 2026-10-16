@@ -47,7 +47,7 @@ from store_sync.core.state import State  # noqa: E402
 from store_sync.core.timefmt import local_time  # noqa: E402
 from store_sync.core.planner import Action  # noqa: E402
 from store_sync.core.writer import apply_updates  # noqa: E402
-from store_sync.core.sync import run_preflight, run_sync  # noqa: E402
+from store_sync.core.sync import run_sync  # noqa: E402
 from store_sync.ui.job_detail import _progress_line  # noqa: E402
 from store_sync.ui.main_window import MainWindow  # noqa: E402
 from store_sync.ui.dialogs import ScheduleOverview  # noqa: E402
@@ -210,12 +210,11 @@ class Controller:
         self._stopped = False
         self._active_prev: str | None = None
 
-        # In-flight off-thread network workers (preflight / mapping pool). The
-        # `_preflight_thread`/`_mapping_thread` attrs are "the current worker for
+        # In-flight off-thread network workers (pairing / mapping pool). The
+        # `_pair_thread`/`_mapping_thread` attrs are "the current worker for
         # this slot" (status/busy checks); `_workers` is the strong-reference
         # container that guarantees a running QThread is never GC'd mid-run. Each
         # worker is discarded on its `finished` signal; all are joined in `stop()`.
-        self._preflight_thread: QThread | None = None
         self._pair_thread: QThread | None = None
         self._mapping_thread: QThread | None = None
         self._apply_thread: QThread | None = None
@@ -296,7 +295,6 @@ class Controller:
             self._scheduler_thread.stop()
             self._scheduler_thread.wait(3000)
             self._scheduler_thread = None
-        self._join_worker("_preflight_thread")
         self._join_worker("_pair_thread")
         self._join_worker("_mapping_thread")
         self._join_worker("_apply_thread")
@@ -324,7 +322,6 @@ class Controller:
         for worker in list(self._workers):
             worker.wait()
         self._workers.clear()
-        self._preflight_thread = None
         self._pair_thread = None
         self._mapping_thread = None
         self._apply_thread = None
@@ -472,9 +469,7 @@ class Controller:
         w.edit_requested.connect(self._open_job)
         w.delete_requested.connect(self._confirm_delete)
         w.save_requested.connect(self._save_from_detail)
-        w.preflight_requested.connect(self._preflight)
         w.pair_requested.connect(self._pair_survey)
-        w.approve_requested.connect(self._approve)
         w.import_requested.connect(self._import_mapping)
         w.export_requested.connect(self._export_mapping)
         w.refresh_requested.connect(self._refresh)
@@ -825,32 +820,6 @@ class Controller:
             self.window.set_status(f"save failed: {name}", _STATUS_FAIL)
             self.window.toast(f'Save failed: "{name}" — see log', kind="fail")
 
-    def _approve(self) -> None:
-        # `JobDetail.approve()` has already checked the enabled box; persist the
-        # approved binding through the normal save path so config + enabled land.
-        name = self._detail_name
-        if not name:
-            return
-        detail = self.window.job_detail
-        try:
-            job = self._job_from_detail()
-        except ValueError:
-            logger.exception("controller: invalid config for %r", name)
-            self.window.set_status("config error", _STATUS_FAIL)
-            self.window.toast("Config error — check the form fields", kind="fail")
-            return
-        if self.save(
-            name,
-            job,
-            schedule=detail.schedule(),
-            enabled=detail.enabled_check.isChecked(),
-        ):
-            self.window.set_status(f"binding approved: {name}", _STATUS_OK)
-            self.window.toast(f'Binding approved: "{name}"', kind="ok")
-        else:
-            self.window.set_status(f"approve failed: {name}", _STATUS_FAIL)
-            self.window.toast(f'Approve failed: "{name}" — see log', kind="fail")
-
     # -- update proposals (manual approval, spec §6) -----------------------
 
     def _apply_proposals(self, ids: list) -> None:
@@ -947,71 +916,6 @@ class Controller:
             self._load_proposals(self._detail_name)
         self.window.set_status(f"dismissed {len(ids)} proposal(s)", _STATUS_OK)
 
-    def _preflight(self) -> None:
-        w = self.window
-        try:
-            job = self._job_from_detail()
-        except ValueError:
-            logger.exception("controller: invalid config for preflight")
-            w.set_status("config error", _STATUS_FAIL)
-            w.toast("Config error — check the form fields", kind="fail")
-            return
-        w.set_status("preflight...", _STATUS_WARN)
-        # Client construction is pure (no I/O) → keep it on the GUI thread so a
-        # bad env is reported immediately; the fetch itself runs off-thread.
-        try:
-            client = self._client()
-        except Exception:  # noqa: BLE001 - surface any failure to operator
-            logger.exception("controller: preflight client failed")
-            w.set_status("preflight error", _STATUS_FAIL)
-            w.toast("Preflight error: could not build STG client (check .env)",
-                    kind="fail")
-            return
-
-        def work():
-            # The worker performs the network fetch and closes its session.
-            try:
-                return run_preflight(job, client=client)
-            finally:
-                self._close_client(client)
-
-        worker = _NetworkWorker(work)
-        worker.ok.connect(self._on_preflight_ok)
-        worker.failed.connect(self._on_preflight_error)
-        self._start_worker("_preflight_thread", worker, label="preflight")
-
-    def _on_preflight_ok(self, result) -> None:
-        w = self.window
-        report, pull_terms = result
-        rows = [
-            {
-                "column": r.source_var,
-                "status": r.status,
-                "detail": f"{r.overlap}/{r.total}",
-            }
-            for r in report.table
-        ]
-        w.job_detail.set_pull_terms(pull_terms)
-        w.job_detail.set_preflight(rows)
-        w.set_status(
-            "preflight ok" if report.ok else "preflight blocked",
-            _STATUS_OK if report.ok else _STATUS_FAIL,
-        )
-        if report.ok:
-            w.toast("Preflight OK — binding is ready to approve", kind="ok")
-        else:
-            reasons = "; ".join(report.errors[:2])
-            w.toast(
-                f"Preflight blocked — {reasons}" if reasons
-                else "Preflight blocked — see review table",
-                kind="fail",
-            )
-
-    def _on_preflight_error(self, exc) -> None:
-        msg = _short(exc)
-        self.window.set_status(f"preflight error: {msg}", _STATUS_FAIL)
-        self.window.toast(f"Preflight error: {msg}", kind="fail")
-
     # -- survey pairing ----------------------------------------------------
 
     def _pair_survey(self) -> None:
@@ -1082,8 +986,8 @@ class Controller:
 
         Used by the import path: the survey XML (the only source of the
         source-var list) is a 30 s+ download for large surveys, so the import
-        validates store columns only and defers source-var validation to
-        preflight, which must run anyway before any write.
+        validates store columns only; a source var is validated against a live
+        pull by the run's own readiness gate, which must pass before any write.
         """
         client = None
         try:
@@ -1125,8 +1029,8 @@ class Controller:
 
         def work():
             # Fast path: GetStore only. Source vars are NOT validated here —
-            # the var list costs a full survey-XML download; preflight (the
-            # mandatory pre-write gate) validates them against a live pull.
+            # the var list costs a full survey-XML download; the run's readiness
+            # gate (the mandatory pre-write gate) validates them on a live pull.
             store_cols = self._store_pool(job)
             return parse_mapping(
                 path,
@@ -1156,7 +1060,7 @@ class Controller:
         w.job_detail.binding_model.set_columns(parsed)
         w.set_status(f"imported {len(parsed)} column(s)", _STATUS_WARN)
         w.toast(
-            f"Imported {len(parsed)} column(s) — run preflight to validate",
+            f"Imported {len(parsed)} column(s) — save to persist",
             kind="ok",
         )
 

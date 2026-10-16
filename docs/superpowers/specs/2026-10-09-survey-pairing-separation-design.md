@@ -4,22 +4,25 @@
 > **Date:** 2026-10-09
 > **Repo:** `stg-store-sync`
 > **Supersedes (in part):** the survey-XML read at run time in
-> `2026-10-08-stg-store-sync-design.md` §2.8 / §7.2 (step 1 of the orchestrator
-> and `run_preflight`). All other domain rules (pull, projection, planning,
-> fail-closed, empty-is-a-value, add-only automation) remain authoritative.
+> `2026-10-08-stg-store-sync-design.md` §2.8 / §7.2 (step 1 of the orchestrator).
+> All other domain rules (pull, projection, planning, fail-closed,
+> empty-is-a-value, add-only automation) remain authoritative.
+> **Further superseded (2026-10-15):** the separate `run_preflight` pass was
+> removed — readiness is verified in-run only. See the readiness-gate section of
+> the main design; the pairing gate described here now lives solely in
+> `_readiness_errors`.
 > **Author:** design session
 
 ---
 
 ## 1. Problem
 
-Every run re-reads the survey definition. `run_sync` and `run_preflight` both
-start by calling `client.get_survey_xml(survey_id)` and running
-`parse_survey_index` over it to derive the pull term
-(`QPM1`) for each configured `source_var` (`T_QPM1_1`). That XML is a 30 s+
-download for a large survey, and it is read **on every single run** — including
-scheduled runs that fire repeatedly over a survey whose variables never change
-once the project is FW'd (finalised).
+Every run re-reads the survey definition. `run_sync` starts by calling
+`client.get_survey_xml(survey_id)` and running `parse_survey_index` over it to
+derive the pull term (`QPM1`) for each configured `source_var` (`T_QPM1_1`). That
+XML is a 30 s+ download for a large survey, and it is read **on every single
+run** — including scheduled runs that fire repeatedly over a survey whose
+variables never change once the project is FW'd (finalised).
 
 The variable names in a FW'd project are stable. Re-reading the definition each
 run is pure overhead: the pairing between `source_var` and its question-level
@@ -27,9 +30,8 @@ base name does not move. The expensive read belongs to **prep** (once, at
 pairing time), not to **automation** (every run).
 
 A secondary consequence: because the definition is read inside the run, the
-pull-term column in the Columns tab is only ever populated transiently by a
-preflight, and is lost on the next load — the pairing is never a durable,
-reviewable artefact.
+pull-term column in the Columns tab was only ever populated transiently, and was
+lost on the next load — the pairing was never a durable, reviewable artefact.
 
 ## 2. Intent (design brief)
 
@@ -126,13 +128,12 @@ A new action, **"🔗 Pair with survey XML"**, on the Columns tab.
    `source_var` and re-pairs.
 
 Pairing writes nothing to the registry by itself; the operator persists the
-result through the normal **Save** / **Approve binding** path, which now carries
-`pull_term`, `survey_index` and `paired_survey_id`.
+result through the normal **Save** path, which now carries `pull_term`,
+`survey_index` and `paired_survey_id`.
 
-**Why not persist on pairing:** the registry is written through one path (Save /
-Approve). A pairing that persisted directly would create a second write path and
-could store a half-edited job. The operator reviews the filled pull terms, then
-saves.
+**Why not persist on pairing:** the registry is written through one path (Save).
+A pairing that persisted directly would create a second write path and could
+store a half-edited job. The operator reviews the filled pull terms, then saves.
 
 ## 5. Run flow (`core/sync.py`)
 
@@ -160,14 +161,14 @@ run itself — the CLI's entire safety story):
 
 When any of these hold the run finishes `blocked` (CLI exit `2`), consistent with
 the existing readiness gate. Because the gate lives in `_readiness_errors`, the
-CLI — which never calls `run_preflight` — is covered without a second fetch.
+CLI is covered without a second fetch.
 
-## 6. Preflight (`run_preflight`)
+## 6. Readiness gate
 
-`run_preflight` also stops reading the XML. It derives terms and the read-only
-pull-term column from `config.source.survey_index`. When the job is unpaired the
-report carries the same pairing error (added to `PreflightReport.errors`), so
-`report.ok` is `False` and the binding cannot be approved until paired.
+There is no separate preflight pass. `_readiness_errors` (the in-run gate)
+carries the pairing error, so an unpaired job's run is `blocked` before any
+write. (Originally this section described a `run_preflight` helper; it was
+removed on 2026-10-15 — readiness is verified in-run only.)
 
 ## 7. CLI
 
@@ -187,7 +188,9 @@ prep action, not an automation action.
   and **`get_survey_xml` is never called** (assert on a fake client); the verify
   fallback still triggers from the cached index.
 - `preflight`: unpaired → `report.ok` is `False` with the pairing error; paired →
-  terms come from the cache, no XML read.
+  terms come from the cache, no XML read. (Note: the separate `run_preflight`
+  helper was removed 2026-10-15; this is the `preflight()` report the in-run gate
+  builds.)
 - `ui`: the pairing button exists; `JobTableModel` renders the stored pull term;
   pairing fills pull terms and marks unresolved columns; controller pairing
   worker returns and persists on save.
@@ -199,7 +202,7 @@ prep action, not an automation action.
 |------|--------|------------|
 | Cached index grows with survey size | Low | One JSON TEXT per job; loaded once per run; large surveys are already downloaded in full for the pull. |
 | `survey_id` edited after pairing | Med | `paired_survey_id` gate blocks a stale pairing. |
-| Operator forgets to pair | Med | Preflight and run both block with a clear message. |
+| Operator forgets to pair | Med | The run blocks with a clear message. |
 | `pull_term` drifts from the cached index | Low | The index is authoritative at run time; `pull_term` is display/gate only. |
 | Legacy jobs silently do a full export | High | Prevented: unpaired jobs **block**; there is no implicit XML fetch or full-export fallback. |
 
@@ -207,6 +210,6 @@ prep action, not an automation action.
 
 - Auto-pairing on load / silent migration backfill.
 - Validating `source_var` against the XML inside pairing (pairing only fills
-  terms; `source_var` presence is still preflight's job).
+  terms; `source_var` presence is still the readiness gate's job).
 - Pairing from the CLI.
 - Multi-survey fan-out per job.

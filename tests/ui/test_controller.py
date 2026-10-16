@@ -183,29 +183,6 @@ def test_save_bad_config_reports_error(tmp_path):
     w.close()
 
 
-def test_preflight_unconfigured_env_reports_error(tmp_path, monkeypatch):
-    """`_client()` raising (no STG_SERVER) must not escape the preflight slot."""
-    monkeypatch.delenv("STG_SERVER", raising=False)
-    w = MainWindow()
-    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c._detail_name = "a"
-    from store_sync.core.registry import JobEntry
-
-    entry = JobEntry(
-        name="a", store_id=17620, id_column="No", survey_id="SURV",
-        match_source_var="SbjNum", match_store_col="SbjNum",
-        dry_run=True,
-        enabled=False, schedule=Schedule(""), column_count=1, last_status=None,
-        last_finished_at=None,
-    )
-    w.job_detail.load(entry, a_job())
-    c._preflight()  # must not raise; client construction fails before any request
-    assert "error" in w.status_label.text().lower()
-    assert "#f87171" in w.status_label.styleSheet()
-    c.stop()
-    w.close()
-
-
 def test_client_missing_env_names_the_vars(tmp_path, monkeypatch):
     """`_client()` must say WHICH vars are missing and point at `.env`."""
     for var in ("STG_SERVER", "STG_USER", "STG_PASSWORD"):
@@ -244,7 +221,7 @@ def test_export_missing_env_surfaces_actionable_error(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     w.show()  # toasts are child overlays → visible only with the window up
     monkeypatch.setattr(
         "PySide6.QtWidgets.QFileDialog.getSaveFileName",
@@ -489,7 +466,7 @@ def test_confirm_delete_yes_removes_job(tmp_path, monkeypatch):
 # -- Important 4: off-thread preflight / mapping ----------------------------
 
 class _BlockingClient:
-    """Fake STG client whose `get_store` blocks until `release` is set."""
+    """Fake STG client whose fetches block until `release` is set."""
 
     def __init__(self, release, calls):
         self.session = types.SimpleNamespace(close=lambda: calls.append("closed"))
@@ -502,16 +479,12 @@ class _BlockingClient:
         return [{"No": 1}]
 
     def get_survey_xml(self, survey_id):
+        self.release.wait(3)
         self.calls.append(("get_survey_xml", survey_id))
         return "<Survey/>"
 
 
-class _Report:
-    ok = True
-    table: list = []
-
-
-def _preflight_entry():
+def _entry():
     return JobEntry(
         name="a", store_id=17620, id_column="No", survey_id="SURV",
         match_source_var="SbjNum", match_store_col="SbjNum",
@@ -521,80 +494,13 @@ def _preflight_entry():
     )
 
 
-def test_preflight_returns_immediately(tmp_path, monkeypatch):
-    """The GUI thread must not wait on the network fetch."""
-    import store_sync.gui as gui
-
-    w = MainWindow()
-    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
-
-    release = threading.Event()
-    calls: list = []
-    client = _BlockingClient(release, calls)
-    monkeypatch.setattr(c, "_client", lambda: client)
-
-    def fake_preflight(job, client):
-        # Actually block on the (fake) network so a sync slot would hang.
-        client.get_store(job.store.id)
-        return _Report(), {}
-
-    monkeypatch.setattr(gui, "run_preflight", fake_preflight)
-
-    start = time.monotonic()
-    c._preflight()
-    elapsed = time.monotonic() - start
-    # Slot returned without waiting on the blocking client.
-    assert elapsed < 1.0
-    assert calls == []  # fetch has not run on the GUI thread
-    assert "preflight" in w.status_label.text().lower()
-    assert c._preflight_thread is not None and c._preflight_thread.isRunning()
-
-    release.set()
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and c._preflight_thread.isRunning():
-        QCoreApplication.processEvents()
-        time.sleep(0.01)
-    QCoreApplication.processEvents()
-    assert w.job_detail.preflight_model.rowCount() == 0  # empty report table
-    assert "closed" in calls  # worker owned + closed its own session
-    c.stop()
-    assert c._preflight_thread is None  # joined on stop()
-    w.close()
-
-
-def test_preflight_worker_failure_reports_error(tmp_path, monkeypatch):
-    import store_sync.gui as gui
-
-    w = MainWindow()
-    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
-    monkeypatch.setattr(c, "_client", lambda: _BlockingClient(threading.Event(), []))
-
-    def boom(job, client):
-        raise RuntimeError("nope")
-
-    monkeypatch.setattr(gui, "run_preflight", boom)
-    c._preflight()
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and c._preflight_thread.isRunning():
-        QCoreApplication.processEvents()
-        time.sleep(0.01)
-    QCoreApplication.processEvents()
-    assert "error" in w.status_label.text().lower()
-    c.stop()
-    w.close()
-
-
 def test_mapping_import_off_thread(tmp_path, monkeypatch):
     import store_sync.gui as gui
 
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
 
     release = threading.Event()
     calls: list = []
@@ -632,7 +538,7 @@ def test_mapping_export_off_thread(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     release = threading.Event()
     calls: list = []
     client = _BlockingClient(release, calls)
@@ -670,7 +576,7 @@ def test_import_and_export_never_pull_survey_xml(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     rows = [{"No": 1, "SbjNum": "9"}]
     calls: list = []
 
@@ -729,7 +635,7 @@ def test_export_error_surfaces_reason_not_generic(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     monkeypatch.setattr(
         "PySide6.QtWidgets.QFileDialog.getSaveFileName",
         staticmethod(lambda *a, **k: ("m.xlsx", "")),
@@ -765,7 +671,7 @@ def test_store_pool_keeps_store_column_order(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     rows = [
         {"Zebra": 1, "Alpha": 2, "mid": 3},
         {"Beta": 4},  # extra column the first row lacked → appended last
@@ -783,7 +689,7 @@ def test_mapping_export_empty_store_reports_error(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     monkeypatch.setattr(c, "_client", lambda: _OrderedClient([]))
     written: list = []
     monkeypatch.setattr(
@@ -812,20 +718,11 @@ def test_mapping_export_empty_store_reports_error(tmp_path, monkeypatch):
 
 # -- Important 4 (round 2): worker ownership / re-entrancy / GUI delivery ----
 
-def _arm_preflight(c, w, monkeypatch, release, calls):
-    """Wire a blocking preflight worker onto `c` and return the imported module."""
-    import store_sync.gui as gui
-
+def _arm_pairing(c, w, monkeypatch, release, calls):
+    """Wire a blocking pairing worker onto `c`."""
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     monkeypatch.setattr(c, "_client", lambda: _BlockingClient(release, calls))
-
-    def fake_preflight(job, client):
-        client.get_store(job.store.id)  # blocks until `release` is set
-        return _Report(), {}
-
-    monkeypatch.setattr(gui, "run_preflight", fake_preflight)
-    return gui
 
 
 def _drain(c, attr, timeout=3.0):
@@ -848,10 +745,10 @@ def test_stop_midflight_joins_unbounded_without_abort(tmp_path, monkeypatch):
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     release = threading.Event()
     calls: list = []
-    _arm_preflight(c, w, monkeypatch, release, calls)
+    _arm_pairing(c, w, monkeypatch, release, calls)
 
-    c._preflight()
-    worker = c._preflight_thread
+    c._pair_survey()
+    worker = c._pair_thread
     assert worker is not None and worker.isRunning()
     # The strong-ref container keeps the running QThread alive (invariant).
     assert worker in c._workers
@@ -867,71 +764,77 @@ def test_stop_midflight_joins_unbounded_without_abort(tmp_path, monkeypatch):
     time.sleep(0.2)
     # Unbounded join: still blocked on the in-flight request, not abandoned.
     assert "stopped" not in done
-    assert c._preflight_thread is worker
+    assert c._pair_thread is worker
 
     release.set()  # let the client's own call return
     th.join(5)
     assert done.get("stopped") is True
     assert not worker.isRunning()
-    assert c._preflight_thread is None
+    assert c._pair_thread is None
     assert c._workers == set()
     w.close()
 
 
-def test_reentrant_preflight_does_not_block_gui(tmp_path, monkeypatch):
+def test_reentrant_pairing_does_not_block_gui(tmp_path, monkeypatch):
     """A second click while in flight returns at once with a busy status."""
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     release = threading.Event()
     calls: list = []
-    _arm_preflight(c, w, monkeypatch, release, calls)
+    _arm_pairing(c, w, monkeypatch, release, calls)
 
-    c._preflight()
-    first = c._preflight_thread
+    c._pair_survey()
+    first = c._pair_thread
     assert first is not None and first.isRunning()
 
     start = time.monotonic()
-    c._preflight()  # re-entrant click on the GUI thread
+    c._pair_survey()  # re-entrant click on the GUI thread
     elapsed = time.monotonic() - start
     assert elapsed < 0.5  # did not join/block on the in-flight fetch
     assert "already running" in w.status_label.text().lower()
-    assert c._preflight_thread is first  # not joined + replaced
+    assert c._pair_thread is first  # not joined + replaced
     assert first.isRunning()
 
     release.set()
-    _drain(c, "_preflight_thread")
+    _drain(c, "_pair_thread")
     c.stop()
     w.close()
 
 
-def test_preflight_result_delivered_on_gui_thread(tmp_path, monkeypatch):
+def test_pairing_result_delivered_on_gui_thread(tmp_path, monkeypatch):
     """The worker's `ok` slot must run on the GUI (main) thread."""
-    import store_sync.gui as gui
+    import store_sync.core.fetcher as fetcher
 
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
 
     ready = threading.Event()
     ready.set()  # non-blocking fake client
     monkeypatch.setattr(c, "_client", lambda: _BlockingClient(ready, []))
-    monkeypatch.setattr(gui, "run_preflight", lambda job, client: (_Report(), {}))
+    monkeypatch.setattr(
+        fetcher, "parse_survey_index", lambda xml: {"T_QPM1_1": "QPM1"}
+    )
+    monkeypatch.setattr(
+        fetcher, "pair_columns",
+        lambda vars_, index: ({v: "QPM1" for v in vars_}, []),
+    )
 
     seen: dict = {}
     main_ident = threading.get_ident()
 
     def record(result):
         seen["ident"] = threading.get_ident()
-        Controller._on_preflight_ok(c, result)
+        Controller._on_pair_ok(c, result)
 
-    monkeypatch.setattr(c, "_on_preflight_ok", record)
+    monkeypatch.setattr(c, "_on_pair_ok", record)
 
-    c._preflight()
-    _drain(c, "_preflight_thread")
+    c._pair_survey()
+    _drain(c, "_pair_thread")
 
     assert seen.get("ident") == main_ident  # delivered on the GUI thread
-    assert "preflight ok" in w.status_label.text().lower()
+    assert "paired" in w.status_label.text().lower()
     c.stop()
     w.close()
 
@@ -1043,7 +946,7 @@ def test_job_from_detail_has_no_delete_policy(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     job = c._job_from_detail()
     assert not hasattr(job.write, "delete_policy")
     c.stop()
@@ -1057,7 +960,7 @@ def test_pair_survey_fills_terms_off_thread(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
 
     class Client:
         session = types.SimpleNamespace(close=lambda: None)
@@ -1079,7 +982,7 @@ def test_pair_survey_reports_unresolved(tmp_path, monkeypatch):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())  # column var T_QPM1_1
+    w.job_detail.load(_entry(), a_job())  # column var T_QPM1_1
 
     class Client:
         session = types.SimpleNamespace(close=lambda: None)
@@ -1098,7 +1001,7 @@ def test_job_from_detail_carries_pairing(tmp_path):
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
     c._detail_name = "a"
-    w.job_detail.load(_preflight_entry(), a_job())
+    w.job_detail.load(_entry(), a_job())
     w.job_detail.set_pairing("SURV", {"T_QPM1_1": "QPM1"}, {"T_QPM1_1": "QPM1"})
     job = c._job_from_detail()
     assert job.source.paired_survey_id == "SURV"

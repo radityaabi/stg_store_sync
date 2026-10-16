@@ -50,42 +50,23 @@ def test_load_and_edit_binding():
     d.binding_model.setData(d.binding_model.index(0, 0), "I8a_1", Qt.EditRole)
     assert d.bindings()[0].store_col == "I8a_1"
 
-def test_approve_enables_and_signals():
-    d = JobDetail()
-    d.load(E(), a_job())
-    seen = []
-    d.approve_requested.connect(lambda: seen.append(1))
-    d.approve()
-    assert seen == [1]
-
-def test_approve_checks_enabled():
-    d = JobDetail()
-    d.load(E(), a_job())
-    assert d.enabled_check.isChecked() is False
-    d.approve()
-    assert d.enabled_check.isChecked() is True
-
 def test_action_rail_buttons_emit():
     d = JobDetail()
     seen = []
     d.back.connect(lambda: seen.append("back"))
-    d.preflight_requested.connect(lambda: seen.append("preflight"))
-    d.approve_requested.connect(lambda: seen.append("approve"))
     d.save_requested.connect(lambda: seen.append("save"))
     d.run_requested.connect(lambda: seen.append("run"))
     d.stop_requested.connect(lambda: seen.append("stop"))
     d.import_requested.connect(lambda: seen.append("import"))
     d.export_requested.connect(lambda: seen.append("export"))
     d.back_button.click()
-    d.preflight_button.click()
-    d.approve_button.click()
     d.save_button.click()
     d.run_button.click()
     d.stop_button.click()
     d.import_button.click()
     d.export_button.click()
     assert seen == [
-        "back", "preflight", "approve", "save", "run", "stop",
+        "back", "save", "run", "stop",
         "import", "export",
     ]
 
@@ -115,8 +96,6 @@ def test_set_pull_terms_and_dict_tables():
     assert d.binding_model.data(d.binding_model.index(0, 2), Qt.DisplayRole) == "term1"
     d.set_history([{"time": "t", "status": "ok", "counts": "1"}])
     assert d.history_model.rowCount() == 1
-    d.set_preflight([{"column": "c", "status": "s", "detail": "d"}])
-    assert d.preflight_model.rowCount() == 1
     d.set_conflicts([{"match": "m", "reason": "r", "side": "x"}])
     assert d.conflicts_model.rowCount() == 1
 
@@ -254,16 +233,16 @@ def test_config_fields_tolerates_whitespace():
 def test_rail_buttons_carry_design_icons_and_object_names():
     d = JobDetail()
     assert d.back_button.text().startswith("←")
-    assert d.preflight_button.text().startswith("✔")
-    assert d.preflight_button.objectName() == "btn_warning"
-    assert d.approve_button.text().startswith("▶")
-    assert d.approve_button.objectName() == "btn_success"
     assert d.save_button.text().startswith("💾")
     assert d.save_button.objectName() == "btn_primary"
     assert d.run_button.text().startswith("▶")
     assert d.run_button.objectName() == "btn_primary"
     assert d.stop_button.text().startswith("⏹")
     assert d.stop_button.objectName() == "btn_danger"
+    # The redundant Approve-binding / Run-preflight buttons are gone: the run's
+    # own readiness gate + id-column probe handle validation, Save persists.
+    assert not hasattr(d, "approve_button")
+    assert not hasattr(d, "preflight_button")
 
 
 def test_column_buttons_carry_design_icons_and_object_names():

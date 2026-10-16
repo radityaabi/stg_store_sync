@@ -141,7 +141,11 @@ class TestApply:
         res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
         kinds = [x[0] for x in c.calls]
         assert "add" in kinds
-        assert "update" not in kinds       # updates are proposals, not writes
+        # The only `update` is the id-column no-op probe (§4.2.1) — one row,
+        # sent back unchanged. Updates themselves are proposals, never writes.
+        updates = [x for x in c.calls if x[0] == "update"]
+        assert len(updates) == 1
+        assert updates[0][1] == store_rows()[0]   # the first store row, verbatim
         assert res.counts["add"] == 1
         assert res.counts.get("update", 0) == 0
 
@@ -193,7 +197,10 @@ class TestConflicts:
         assert res.status == "partial"
         kinds = [x[0] for x in c.calls]
         assert "add" in kinds
-        assert "update" not in kinds
+        # The single `update` is the id-column probe, not a proposal write.
+        updates = [x for x in c.calls if x[0] == "update"]
+        assert len(updates) == 1
+        assert updates[0][1] == store_rows()[0]
         tracked = st.tracked_keys("link1")
         assert "105" in tracked
         assert "104" not in tracked        # duplicate key skipped
@@ -442,14 +449,46 @@ class TestPairingGate:
         assert not any("not present in the pull" in e for e in res.errors)
 
 
-def test_run_preflight_never_reads_xml(st):
-    from store_sync.core.sync import run_preflight
-    called = []
+def test_live_run_probes_id_column_before_adding(st):
+    """A live run with adds re-writes one row unchanged to verify the id column."""
     c = FakeClient(store=store_rows(), subjects=subjects())
-    c.get_survey_xml = lambda sid: called.append(sid) or SURVEY_XML
-    report, terms = run_preflight(config(), client=c)
-    assert called == []
-    assert terms["T_QPM1_1"] == "QPM1"
+    run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+    # The probe runs before the first add (spec §4.2.1).
+    kinds = [x[0] for x in c.calls if x[0] in ("update", "add")]
+    assert kinds[0] == "update"
+    assert kinds[1] == "add"
+
+
+def test_dry_run_never_probes(st):
+    """A dry run is a pure simulation — it must not touch the store at all."""
+    c = FakeClient(store=store_rows(), subjects=subjects())
+    run_sync(config(dry_run=True), client=c, state=st, throttle=0, backoff=0)
+    assert [x for x in c.calls if x[0] in ("add", "update")] == []
+
+
+def test_no_adds_means_no_probe(st):
+    """Nothing to add → nothing to verify → no probe write."""
+    c = FakeClient(store=store_rows(), subjects=subjects()[:2])  # 101/102 already there
+    run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+    assert [x for x in c.calls if x[0] in ("add", "update")] == []
+
+
+def test_failed_probe_blocks_before_any_add(st):
+    """A wrong id column (probe 500) must halt the run before any AddRow."""
+    class Boom(FakeClient):
+        def update_row(self, store_id, values):
+            self.calls.append(("update", values))
+            raise STGError("id column data not found")
+
+    c = Boom(store=store_rows(), subjects=subjects())
+    res = run_sync(config(dry_run=False), client=c, state=st, throttle=0, backoff=0)
+    assert res.status == "blocked"
+    assert any("probe" in e for e in res.errors)
+    assert [x for x in c.calls if x[0] == "add"] == []
+    run = st.recent_runs("link1")[0]
+    assert run["status"] == "blocked"
+    conflicts = st.conflicts_for_run(run["id"])
+    assert any("probe" in cf["reason"] for cf in conflicts)
 
 
 class TestBlacklist:

@@ -108,19 +108,21 @@ hard halt.
   behaviour via `src_dups`), the run continues, and the keys are reported as
   skipped conflicts → run status `partial` when there are applied writes.
 
-### 3.3 A3 — Preflight gates every write path (Important)
+### 3.3 A3 — Readiness gates every write path (Important)
 
-**Bug.** `run_sync` never runs preflight. It writes even when the id column is
-missing/non-unique or the match key is non-unique in the store. The CLI bypasses
-the GUI's Approve gate entirely.
+**Bug.** `run_sync` never ran a readiness check. It wrote even when the id column
+was missing/non-unique or the match key was non-unique in the store.
 
-**Fix.**
-- Extract a `check_ready(config, client) -> PreflightReport` used by both
-  `run_sync` and the GUI preflight action (no double-fetch: the sync reuses the
-  already-fetched store snapshot where practical).
+**Fix (landed; later simplified 2026-10-15).**
+- `_readiness_errors(config, store_rows, source_records)` evaluates the full
+  preflight error set inside `run_sync`, reusing the already-fetched store
+  snapshot and pulled records (no double-fetch).
 - `run_sync` runs readiness **before** any write. `report.ok == False` → status
   `blocked`, zero writes, errors recorded.
-- CLI runs the same readiness check; a `blocked` job must exit non-zero.
+- CLI runs the same gate; a `blocked` job exits non-zero.
+- There is no separate GUI preflight action — the GUI uses the same in-run gate,
+  and dry-run is the way to preview. The id-column no-op probe (§4.2.1) runs on a
+  live run with adds.
 
 ### 3.4 A4 — ~~Honor `source.window_days` / `date_type`~~ (SUPERSEDED)
 
@@ -146,8 +148,8 @@ registration carries no time configuration — `SourceConfig` is
 - `writer.apply_plan` must not fall back to a hardcoded `id_col="No"`; take the
   id column from the config or skip verification with an explicit error.
 - CLI exit code: `blocked` → non-zero.
-- Empty store: preflight reports "no rows to match" as an explicit state rather
-  than failing opaquely.
+- Empty store: the readiness gate reports "no rows to match" as an explicit state
+  rather than failing opaquely.
 - `mapping_io`: half-filled rows are reported as errors, not silently skipped.
 - Delete the dead hidden `QTableWidget` in the binding tab.
 - Planner: a store row missing the match column is reported, not silently dropped.
@@ -310,7 +312,9 @@ gui.py               # Controller: owns Registry + RunQueue + threads; wiring
 - **History:** runs for this store (from `State.recent_runs`), double-click → Run
   detail.
 - **Conflicts:** latest conflicts for this store.
-- Buttons: **Run preflight** · **Approve binding** · **Save** · **Run now** · **Stop**.
+- Buttons: **Save** · **Run now** · **Stop**. Enabling a job is the Enabled
+  checkbox + Save — there is no separate "Approve binding" step, and no separate
+  "Run preflight" step (readiness is verified inside every run; dry-run previews).
 
 ### 6.3 Run detail
 
@@ -338,7 +342,7 @@ stg-store-sync-cli run-all [--enabled-only]
 stg-store-sync-cli stop <name>
 ```
 
-Exit codes: `0` ok · `2` blocked (preflight) · `3` partial/error · `1` usage.
+Exit codes: `0` ok · `2` blocked (readiness gate) · `3` partial/error · `1` usage.
 `run` performs the §3.3 readiness check first.
 
 ---

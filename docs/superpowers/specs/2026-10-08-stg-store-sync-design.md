@@ -130,7 +130,7 @@ Probe F1: each store designates one **id/tag column**. `UpdateRow` and
 (on a store whose id column is `No`) or silently no-op (on a store whose id
 column is `uniqueID`). `AddRow` without the id value produces tag `0` (probe F5),
 which is then unreachable by tag. So the job must **declare** the id column and
-preflight must **verify** it.
+the run must **verify** it.
 
 ### 2.6 Pull-window trap (why there is no delete)
 
@@ -184,8 +184,8 @@ name is resolved as follows:
   project locally — always correct, just heavier.
 
 **The user declares only two things per column: the store column and the source
-variable.** The pull term is an internal optimisation, shown **read-only** in
-preflight, never a required input. The filter is never a correctness dependency.
+variable.** The pull term is an internal optimisation, shown **read-only** in the
+binding grid, never a required input. The filter is never a correctness dependency.
 
 ---
 
@@ -231,8 +231,9 @@ the same panelist is a **new row**.
 
 ### 4.2.1 Id-column declaration & verification
 
-The user sets `store.id_column` in the GUI. For safety, preflight runs an
-**id-column check** (read-only except one no-op probe):
+The user sets `store.id_column` in the GUI. For safety, a live run verifies it
+before its first write with an **id-column check** (read-only except one no-op
+probe):
 
 ```
 1) column exists on the store?          no  → reject, job cannot write
@@ -243,10 +244,10 @@ The user sets `store.id_column` in the GUI. For safety, preflight runs an
        500 "id column data not found"            → id_column WRONG   ❌
 ```
 
-The no-op probe is safe: sending identical values changes nothing (verified on
-store 17417 — 295 rows in, 295 rows out). It runs **once at preflight**, not on
-every sync, and is exempt from the `dry_run` guard (it is a verification step,
-not a data change).
+Checks 1–2 run on every run (they need only the store snapshot). Check 3 is a
+write, so it runs **once, on the first live run that has an add** — a dry-run
+never probes. The no-op probe is safe: sending identical values changes nothing
+(verified on store 17417 — 295 rows in, 295 rows out).
 
 ### 4.2 Lookup
 
@@ -280,13 +281,13 @@ New rows are discovered **by key set difference**, never by position/timestamp.
 match key missing in a source record    → QUARANTINE that record (report), no write
 match key duplicated within source      → CONFLICT, skip those rows, report
 match key duplicated within store       → HALT the job, report
-id/tag column missing in config         → preflight fails, job never writes
+id/tag column missing in config         → run blocked, job never writes
 Update NEVER writes the id/tag column to a new value
 All conflicts → `conflicts` table (SQLite); the run reports and stops
 ```
 
-Any candidate identity that fails uniqueness over the sample is **rejected
-automatically** by preflight (§5).
+Any candidate identity that fails uniqueness is **rejected automatically** by
+the readiness gate (§5).
 
 ### 4.5 Adoption of a legacy store
 
@@ -320,22 +321,35 @@ survey.
   safety net when a job happens to use identical names. A `strict` mismatch
   **blocks** the job.
 
-Auto-mapping is never silent: preflight **suggests** an alias (highest
+Auto-mapping is never silent: the readiness gate **suggests** an alias (highest
 value-overlap) but a human must approve it.
 
-### 5.2 Preflight
+### 5.2 Readiness gate (in-run)
 
-Runs (once, and whenever the config changes) and produces a review table:
+The gate is evaluated **inside every run**, before any write, over the data the
+run already fetched (the store snapshot + the full pull) — there is no separate
+preflight pass to click, and no second fetch. It fails closed: any error → the
+run is `blocked` and nothing is written.
 
-| store col | suggested source var | value overlap | status |
-|---|---|---|---|
-| `uniqueID` | `T_QPM1_2` | 295/296 | ✅ |
-| `I7_1_2` | `T_QPM1_1` | 295/296 | ⚠️ format differs |
-| `I8a_1` | `T_QPM1_3` | 295/296 | ⚠️ format differs |
-| `Q32` | `Q32` | 295/295 | ✅ |
+| check | on error |
+|---|---|
+| store has rows | `store has no rows` |
+| each column's store column exists | `store column 'X' not present on the store` |
+| each column's source var is in the pull or the survey index | `source var 'X' not present...` |
+| id column exists / is unique | `id column 'X' ...` |
+| match key unique in the store | halts the run |
+| match key unique in the pull | rows skipped, run `partial` |
+| `strict`: every `source_var == store_col` | blocks |
+| pairing: index present, `paired_survey_id == survey_id`, every column has a `pull_term` | blocks |
 
-Preflight also runs the **id-column declaration check** (§4.2.1: exists, unique,
-no-op probe) and validates the match key's uniqueness (§4.4).
+Per-column value overlap is also computed and reported (status `ok` /
+`format_differs` / `partial`), but a partial overlap is a report, not a block —
+differences surface as conflicts and update proposals. To see them *before* a
+write, run with **Dry-run** on (the default): the same gate runs, the plan is
+printed, and nothing is written.
+
+The id-column **no-op probe** (§4.2.1) is the one write the gate may perform; it
+runs on a live run with at least one add and is skipped entirely on dry-run.
 
 ### 5.3 Value comparison — strict 100%
 
@@ -432,7 +446,7 @@ stg-store-sync/
 │   │   ├── config.py              # job schema + validation + persistence
 │   │   ├── stg_client.py          # REST: stores / export / Add|UpdateRow
 │   │   ├── fetcher.py             # pull → flatten EAV
-│   │   ├── binding.py             # parity + auto-suggest + preflight key test
+│   │   ├── binding.py             # parity + auto-suggest + id-column probe
 │   │   ├── planner.py             # diff → add / update (proposal) / conflicts
 │   │   ├── writer.py              # apply adds + CAS update proposals
 │   │   └── state.py               # SQLite: jobs, run log, conflicts, hashes
@@ -445,7 +459,7 @@ stg-store-sync/
 
 ```yaml
 job: gran_turismo_link1
-store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; preflight-verified
+store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; verified on the run
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
           variable_names: ["QPM1", "Q32", "SbjNum"] }  # question-level base names (probe F9)
 # window_days / date_type removed: every sync pulls full history
@@ -457,7 +471,7 @@ binding:
     - { source_var: "T_QPM1_1", store_col: "I7_1_2", kind: text }
     - { source_var: "T_QPM1_3", store_col: "I8a_1",  kind: text }
     - { source_var: "Q32",      store_col: "Q32",    kind: text }
-  # pull term (question-level base name) is DERIVED (shown read-only in preflight);
+  # pull term (question-level base name) is DERIVED (shown read-only in the grid);
   # not a user input. If it cannot be resolved → full export + local projection.
 write:
   op: full_sync                    # add automated; update proposed; no delete
@@ -468,8 +482,8 @@ write:
 ### 7.2 Data flow
 
 ```
-[preflight, once]
-  get_store + sample export → binding.preflight → USER APPROVE → persist binding
+[prep, once — Pairing action]
+  get_survey_xml → survey index → per-column pull_term → Save (persist binding)
 
 [each Sync / tick]
   fetcher.pull(survey, variableNames=<tokens>)   # full history; no window/dateType
@@ -477,8 +491,10 @@ write:
     └─ VERIFY every needed var is present; else fall back to full export
     └─ PROJECT to the configured columns (source of truth)
   binding.apply()                → {id_column, match, columns}
+  readiness gate (§5.2, fail-closed, before any write)
   planner.diff(store_rows, records)
     └─ add / update (proposal) / same / conflicts
+  noop_probe (live adds only)    → POST SubjectStores/UpdateRow (one row, unchanged)
   writer.apply()                 → POST SubjectStores/AddRow/...   (adds only)
   writer.apply_updates()         → POST SubjectStores/UpdateRow/... (approved proposals, CAS)
   state.record_run()             → log + hashes + pending proposals
@@ -498,15 +514,16 @@ write:
   the source-variable column) and **uploaded back** to populate the job. This
   supports bulk mapping for wide surveys without clicking row by row. Import is
   validated (unknown store columns / source vars, duplicates → rejected with a
-  report) and still passes through **Approve binding** before any write.
-- Preflight view + **Approve binding** dialog (shows the derived pull terms,
-  id-column check, match-key uniqueness, value-overlap suggestions).
+  report) and is persisted through **Save** before any write.
 - **Sync** button; Dry-run toggle (default on).
 - Run log + conflicts panel.
 - **Proposed updates** panel — pending update proposals (match, id, `col: old →
   new` diffs) with a tick-box column and **Apply selected** / **Dismiss
   selected**. Applying is compare-and-swap; a stale proposal is skipped and
   reported. There is **no delete** anywhere in the UI.
+
+Readiness is verified **behind the scenes** on every run (§5.2); the GUI has no
+separate "run preflight" step. To preview a run without writing, use Dry-run.
 
 ---
 
@@ -523,7 +540,7 @@ write:
 | Strict 100% vs real data (phones/truncation) | Medium | report as conflicts; opt-in normalisation |
 | 1 request/row × N rows | Medium | throttle + retry + resume |
 | Store LIVE ─ writes are production data | High | dry-run default; explicit confirm; audit log |
-| Id column declared wrongly | Medium | preflight verifies it against the live store (§5.2) |
+| Id column declared wrongly | Medium | the run verifies it against the live store (§5.2) |
 | Multiple links writing one store | Medium | filelock; run log |
 
 ---
@@ -538,11 +555,11 @@ write:
 - ✅ Dummy row `uniqueID=999999` removed from 17417 (back to 295 rows).
 
 **Fase 1 — Skeleton** — `pyproject`, `stg_client` (read+write, mock tests), `config`.
-**Fase 2 — Binding gate** — `binding.preflight` + id-column verify + match-key
-uniqueness test + approve dialog; `strict` mismatch blocks.
+**Fase 2 — Binding gate** — `binding.preflight` + id-column verify (incl. no-op
+probe on the run path) + match-key uniqueness test; `strict` mismatch blocks.
 **Fase 3 — Data** — `fetcher` + EAV flatten + `planner.diff`.
 **Fase 4 — Adoption + Write** — `SbjNum` adoption, `writer`, idempotency, `state`.
-**Fase 5 — GUI** — job config, preflight, Sync, dry-run, log.
+**Fase 5 — GUI** — job config, Sync, dry-run, log.
 **Fase 6 — Scheduled** — `cli.py` + filelock (optional).
 
 ---

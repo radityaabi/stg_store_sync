@@ -48,9 +48,7 @@ class MainWindow(QMainWindow):
     edit_requested = Signal(str)
     delete_requested = Signal(str)
     save_requested = Signal()
-    preflight_requested = Signal()
     pair_requested = Signal()
-    approve_requested = Signal()
     import_requested = Signal()
     export_requested = Signal()
     refresh_requested = Signal()
@@ -131,9 +129,7 @@ class MainWindow(QMainWindow):
         # the page (the currently-open job is implied), so adapt it.
         self.job_detail.back.connect(self.back.emit)
         self.job_detail.save_requested.connect(self.save_requested.emit)
-        self.job_detail.preflight_requested.connect(self.preflight_requested.emit)
         self.job_detail.pair_requested.connect(self.pair_requested.emit)
-        self.job_detail.approve_requested.connect(self.approve_requested.emit)
         self.job_detail.run_requested.connect(self._on_detail_run)
         self.job_detail.stop_requested.connect(self.stop_requested.emit)
         self.job_detail.import_requested.connect(self.import_requested.emit)
@@ -180,7 +176,7 @@ class MainWindow(QMainWindow):
         """Show a floating, auto-dismissing notification (top-right).
 
         `kind`: "ok" | "warn" | "fail". For **terminal** events only (save
-        ok/failed, import rejected, preflight blocked, …) — transient progress
+        ok/failed, import rejected, blocked, …) — transient progress
         ("importing...", "ready") belongs in `set_status`, not here.
         """
         from store_sync.ui.toast import show_toast

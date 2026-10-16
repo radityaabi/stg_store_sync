@@ -183,11 +183,12 @@ The in-process tick loop that enqueues enabled jobs when their interval
 `Schedule` (minute/hour/day/week) is due.
 _Avoid_: cron, daemon.
 
-**Readiness gate** (preflight):
+**Readiness gate**:
 The check that must pass before any write — id-column existence/uniqueness,
-match-key uniqueness, strict-mode parity, and the no-op id probe. A failure
-blocks the run.
-_Avoid_: validation, sanity check.
+match-key uniqueness, strict-mode parity, pairing completeness, and the no-op id
+probe. It runs inside every run, over data the run already fetched; a failure
+blocks the run. There is no separate "run preflight" action.
+_Avoid_: validation, sanity check, preflight pass.
 
 ## Notifying
 
