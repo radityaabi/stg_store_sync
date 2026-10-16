@@ -44,6 +44,9 @@ _PAIRING_COLUMNS = (
 _PIC_COLUMNS = (
     # (column, DDL) — the per-job PIC recipient list (run notifications).
     ("pic", "TEXT NOT NULL DEFAULT ''"),
+    # (column, DDL) — the per-job run-notification on/off switch. Default 1 so
+    # an existing job keeps mailing (current behavior unchanged).
+    ("notify_enabled", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 _SCHEMA = """
@@ -64,6 +67,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     survey_index     TEXT NOT NULL DEFAULT '{}',
     paired_survey_id TEXT NOT NULL DEFAULT '',
     pic            TEXT NOT NULL DEFAULT '',
+    notify_enabled INTEGER NOT NULL DEFAULT 1,
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -96,6 +100,7 @@ class JobEntry:
     last_status: str | None
     last_finished_at: str | None
     pic: str = ""
+    notify_enabled: bool = True
 
 
 _ENTRY_FIELDS = """
@@ -105,6 +110,7 @@ SELECT jobs.name, jobs.store_id, jobs.id_column, jobs.survey_id,
        jobs.schedule_unit, jobs.schedule_every, jobs.schedule_at,
        jobs.schedule_weekday,
        jobs.pic,
+       jobs.notify_enabled,
        (SELECT COUNT(*) FROM job_columns c WHERE c.job_id = jobs.id) AS column_count,
 """
 
@@ -212,6 +218,7 @@ class Registry:
             json.dumps(job.source.survey_index),
             str(job.source.paired_survey_id),
             str(job.pic),
+            int(bool(job.notify_enabled)),
         )
 
     def _replace_columns(self, job_id: int, job: JobConfig) -> None:
@@ -270,6 +277,7 @@ class Registry:
             last_status=row["last_status"],
             last_finished_at=row["last_finished_at"],
             pic=row["pic"],
+            notify_enabled=bool(row["notify_enabled"]),
         )
 
     def _has_runs(self) -> bool:
@@ -302,9 +310,10 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "dry_run, survey_index, paired_survey_id, pic, enabled, "
+                    "dry_run, survey_index, paired_survey_id, pic, notify_enabled, "
+                    "enabled, "
                     "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, int(bool(enabled)),
                      *self._schedule_values(schedule)),
                 )
@@ -328,6 +337,7 @@ class Registry:
             "store_id = ?", "id_column = ?", "survey_id = ?",
             "match_source_var = ?", "match_store_col = ?",
             "dry_run = ?", "survey_index = ?", "paired_survey_id = ?", "pic = ?",
+            "notify_enabled = ?",
             "name = ?",
         ]
         # values order matches `sets`; job name for the WHERE is the last value.
@@ -388,6 +398,7 @@ class Registry:
                 dry_run=bool(row["dry_run"]),
             ),
             pic=row["pic"],
+            notify_enabled=bool(row["notify_enabled"]),
         )
 
     # -- queries -----------------------------------------------------------

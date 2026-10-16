@@ -313,3 +313,31 @@ def test_registry_migrates_old_db_without_pic(tmp_path):
     r = Registry(p)
     assert r.get_entry("old").pic == ""
     r.close()
+
+
+def test_notify_enabled_round_trips_through_registry(tmp_path):
+    r = Registry(tmp_path / "reg.db")
+    job = a_job(); job.notify_enabled = False
+    r.add(job)
+    assert r.get("link1").notify_enabled is False
+    assert r.get_entry("link1").notify_enabled is False
+    r.close()
+
+
+def test_registry_migrates_old_db_notify_enabled_defaults_true(tmp_path):
+    import sqlite3
+    p = tmp_path / "old2.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "name TEXT NOT NULL UNIQUE, store_id INTEGER NOT NULL, "
+                "id_column TEXT NOT NULL, survey_id TEXT NOT NULL, "
+                "match_source_var TEXT NOT NULL, match_store_col TEXT NOT NULL, "
+                "dry_run INTEGER NOT NULL DEFAULT 1, enabled INTEGER NOT NULL DEFAULT 0)")
+    con.execute("INSERT INTO jobs (name, store_id, id_column, survey_id, "
+                "match_source_var, match_store_col) VALUES ('old', 1, 'No', 'S', 'M', 'M')")
+    con.commit(); con.close()
+    r = Registry(p)
+    # An existing job keeps mailing by default (current behavior unchanged).
+    assert r.get_entry("old").notify_enabled is True
+    assert r.get("old").notify_enabled is True
+    r.close()

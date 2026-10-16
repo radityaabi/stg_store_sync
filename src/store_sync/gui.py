@@ -792,6 +792,7 @@ class Controller:
                 dry_run=fields["dry_run"],
             ),
             pic=fields.get("pic", ""),
+            notify_enabled=fields.get("notify_enabled", True),
         )
 
     def _save_from_detail(self) -> None:

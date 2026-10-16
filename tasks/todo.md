@@ -157,5 +157,18 @@
 - [x] 13.2 Tests — `test_state.py` supersede cases; suite green (532)
 - [x] 13.3 Docs — invariant 3, base-spec §6 note, `CONTEXT.md` vocabulary
 
+## Phase 14 — Per-job email on/off ✅ COMPLETE
+> The run notification is now an operator choice: a per-job `notify_enabled`
+> toggle (GUI checkbox, default ON) gates the mail, on top of the existing
+> `--no-notify` invocation flag. Off = no mail, run unchanged.
+
+- [x] 14.1 `core/config.py` — `JobConfig.notify_enabled` (default True, omitted when True)
+- [x] 14.2 `core/registry.py` — `jobs.notify_enabled` column + migration (default 1), `JobEntry`
+- [x] 14.3 `core/sync.py` — mail only when `notify and config.notify_enabled`
+- [x] 14.4 `ui/job_detail.py` + `gui.py` — Config-tab checkbox; `config_fields`/`_job_from_detail`
+- [x] 14.5 Tests — config round-trip, registry migration, sync gate, checkbox (543 green)
+- [x] 14.6 Docs — invariant 15, spec §10, `CONTEXT.md`
+- [x] 14.7 Fixed pre-existing shadowed `TestNotificationWiring` (4 tests uncollected)
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

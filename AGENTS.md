@@ -121,6 +121,9 @@ Violating any of these corrupts production data or the safety model:
     as `failed` and nothing else changes. Every attempt — sent, skipped, failed
     or dry_run — is a `notifications` row. A PIC entry that is not an email
     address warns in the GUI but never blocks saving, and is never mailed.
+    Mailing is **per-job opt-out** (`jobs.notify_enabled`, GUI checkbox, default
+    ON); a run mails only when `notify` (the `--no-notify` invocation flag) is
+    true **and** the job's toggle is on. Turning it off never affects the run.
 
 ## Docs — source of truth
 

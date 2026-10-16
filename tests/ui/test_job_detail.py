@@ -77,7 +77,7 @@ def test_config_fields_round_trip():
         "store_id": 17620, "id_column": "No", "survey_id": "SURV",
         "match_source_var": "SbjNum", "match_store_col": "SbjNum",
         "dry_run": True, "survey_index": {}, "paired_survey_id": "",
-        "pic": "",
+        "pic": "", "notify_enabled": True,
     }
 
 
@@ -404,3 +404,19 @@ def test_pic_field_defaults_empty_and_strips():
     assert d.pic_edit.text() == "" and d.pic_warning.text() == ""
     d.pic_edit.setText("  a@x.com  ")
     assert d.config_fields()["pic"] == "a@x.com"
+
+
+def test_notify_checkbox_loads_saves_and_defaults_on():
+    d = JobDetail(); d.load(E(), a_job())
+    assert d.notify_check.isChecked() is True
+    assert d.config_fields()["notify_enabled"] is True
+    d.notify_check.setChecked(False)
+    assert d.config_fields()["notify_enabled"] is False
+
+
+def test_notify_checkbox_reflects_a_disabled_job():
+    job = a_job_with_pic("a@x.com")
+    job.notify_enabled = False
+    d = JobDetail(); d.load(E(), job)
+    assert d.notify_check.isChecked() is False
+    assert d.config_fields()["notify_enabled"] is False

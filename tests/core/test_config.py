@@ -209,3 +209,14 @@ def test_pic_round_trips_and_is_omitted_when_empty():
     assert JobConfig.from_dict(d).pic == "a@x.com; b@y.com"
     assert JobConfig.from_dict(d).to_dict()["pic"] == "a@x.com; b@y.com"
     assert "pic" not in JobConfig.from_dict(sample_dict()).to_dict()
+
+
+def test_notify_enabled_defaults_true_and_is_omitted_when_true():
+    assert JobConfig.from_dict(sample_dict()).notify_enabled is True
+    assert "notify_enabled" not in JobConfig.from_dict(sample_dict()).to_dict()
+
+
+def test_notify_enabled_round_trips_when_false():
+    d = sample_dict(); d["notify_enabled"] = False
+    assert JobConfig.from_dict(d).notify_enabled is False
+    assert JobConfig.from_dict(d).to_dict()["notify_enabled"] is False

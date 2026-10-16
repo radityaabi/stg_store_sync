@@ -148,6 +148,10 @@ class JobDetail(QWidget):
         pic_row.addWidget(self.pic_edit)
         lay.addLayout(pic_row)
 
+        self.notify_check = QCheckBox("Email PIC on added rows")
+        self.notify_check.setChecked(True)
+        lay.addWidget(self.notify_check)
+
         self.pic_warning = QLabel("")
         self.pic_warning.setObjectName("PicWarning")
         self.pic_warning.setWordWrap(True)
@@ -408,6 +412,7 @@ class JobDetail(QWidget):
         )
         self.dry_run_check.setChecked(bool(job.write.dry_run))
         self.pic_edit.setText(job.pic)
+        self.notify_check.setChecked(bool(job.notify_enabled))
         self._update_pic_warning(job.pic)
 
         self._survey_index = dict(job.source.survey_index)
@@ -487,6 +492,7 @@ class JobDetail(QWidget):
             "survey_index": dict(self._survey_index),
             "paired_survey_id": self._paired_survey_id,
             "pic": self.pic_edit.text().strip(),
+            "notify_enabled": self.notify_check.isChecked(),
         }
 
     def _update_pic_warning(self, text: str) -> None:

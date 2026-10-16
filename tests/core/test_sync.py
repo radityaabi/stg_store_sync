@@ -563,6 +563,15 @@ class TestNotificationWiring:
         c = FakeClient(store=store_rows(), subjects=subjects())
         run_sync(config(dry_run=False), client=c, state=st, notify=False)
 
+    def test_run_sync_job_notify_disabled_skips_notification(self, monkeypatch, st):
+        import store_sync.core.sync as sync_mod
+        monkeypatch.setattr(sync_mod, "notify_run_report",
+                            lambda *a, **k: pytest.fail("must not notify"))
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        cfg = config(dry_run=False)
+        cfg.notify_enabled = False
+        run_sync(cfg, client=c, state=st)
+
     def test_notification_failure_does_not_change_run_status(self, monkeypatch, st):
         import store_sync.core.sync as sync_mod
 
@@ -582,7 +591,7 @@ class TestNotificationWiring:
         assert row is not None and row["status"] == "skipped"
 
 
-class TestNotificationWiring:
+class TestRunFinishStamp:
     def test_run_records_its_finish_time(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=False), client=c, state=st)

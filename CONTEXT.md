@@ -211,5 +211,8 @@ The HTML summary of one run — its facts (job, store, survey, run, time, counts
 status), summary only — mailed to the job's
 PIC. Sent by OWA via Playwright (no SMTP), only for a live run that added at
 least one row. A side channel: it never changes a run's status, and every
-attempt (sent / skipped / failed / dry_run) is recorded.
+attempt (sent / skipped / failed / dry_run) is recorded. Mailing is **per-job
+opt-out** (`jobs.notify_enabled`, the GUI's "Email PIC on added rows" checkbox,
+default ON): a run mails only when that toggle is on and the run was not invoked
+with `--no-notify`.
 _Avoid_: alert, email, message.

@@ -84,7 +84,9 @@ def run_sync(
 
     The notification is a **side channel**: it runs after the run row is already
     finished, is wrapped so it can never raise, and cannot change the returned
-    result. Pass `notify=False` to suppress it for one invocation.
+    result. It is sent only when `notify` is true (the per-invocation flag, e.g.
+    `--no-notify`) **and** the job has notifications enabled
+    (`config.notify_enabled`, the per-job GUI toggle).
     """
     res = _run_sync_inner(
         config,
@@ -97,7 +99,7 @@ def run_sync(
         progress=progress,
     )
     _stamp_finished(res, state)
-    if notify:
+    if notify and config.notify_enabled:
         _notify_safely(config, state, res, out_dir=notify_out_dir)
     return res
 

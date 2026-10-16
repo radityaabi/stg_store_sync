@@ -301,6 +301,11 @@ stg-store-sync-cli run-due         … [--no-notify]
   any entry that is not an address. `config_fields()` gains `pic`;
   `Controller._job_from_detail` and `Controller.save` thread it through
   unchanged otherwise.
+- **Job detail → Config tab**: an `Email PIC on added rows` `QCheckBox` bound to
+  `jobs.notify_enabled` (default ON). It is the per-job ON/OFF switch: a run
+  mails only when the checkbox is on **and** the invocation flag is not
+  `--no-notify`. Turning it off never affects the run — the mail is a side
+  channel. `config_fields()` gains `notify_enabled`.
 - **Run detail**: one notification line under the summary —
   `Mail: sent to a@x, b@y` / `Mail: skipped — no adds` / `Mail: failed — …` —
   read from `state.notification_for_run(run_id)`. Absent row → the line reads

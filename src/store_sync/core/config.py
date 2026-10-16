@@ -265,6 +265,7 @@ class JobConfig:
     binding: BindingConfig
     write: WriteConfig
     pic: str = ""
+    notify_enabled: bool = True
 
     @classmethod
     def from_dict(cls, d: dict[str, Any], do_validate: bool = True) -> "JobConfig":
@@ -275,6 +276,7 @@ class JobConfig:
             binding=BindingConfig.from_dict(d.get("binding", {})),
             write=WriteConfig.from_dict(d.get("write", {})),
             pic=str(d.get("pic", "")),
+            notify_enabled=bool(d.get("notify_enabled", True)),
         )
         if do_validate:
             errors = validate(cfg)
@@ -292,6 +294,8 @@ class JobConfig:
         }
         if self.pic:
             out["pic"] = self.pic
+        if not self.notify_enabled:
+            out["notify_enabled"] = False
         return out
 
 
