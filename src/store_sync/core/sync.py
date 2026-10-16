@@ -325,6 +325,7 @@ def _run_sync_inner(
             backoff=backoff,
             id_column=config.store.id_column,
             should_stop=should_stop,
+            on_add=lambda done, total: _emit("add", done=done, total=total),
         )
         errors.extend(wres.errors)
         _emit("applied", counts=dict(wres.counts), dry_run=dry_run)

@@ -261,7 +261,7 @@ class TestProgress:
         stages = [e["stage"] for e in events]
         assert stages == [
             "start", "ids", "pull", "store",
-            "preflight", "plan", "apply", "applied", "proposals", "done",
+            "preflight", "plan", "apply", "add", "applied", "proposals", "done",
         ]
 
     def test_events_carry_counts_where_known(self, st):
@@ -302,6 +302,23 @@ class TestProgress:
         c = FakeClient(store=store_rows(), subjects=subjects())
         res = run_sync(config(dry_run=True), client=c, state=st)
         assert res.status == "ok"
+
+    def test_live_run_emits_add_progress(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(
+            config(dry_run=False), client=c, state=st,
+            throttle=0, backoff=0, progress=events.append,
+        )
+        adds = [e for e in events if e["stage"] == "add"]
+        assert adds == [{"stage": "add", "done": 1, "total": 1}]
+
+    def test_dry_run_emits_no_add_progress(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        assert [e for e in events if e["stage"] == "add"] == []
+
     def test_cancelled_run_status_and_tracking(self, st):
         subs = subjects() + [
             subj("5", [("SbjNum", 105), ("T_QPM1_1", "Eve"), ("Q32", 55)]),

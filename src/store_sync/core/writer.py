@@ -63,18 +63,24 @@ def apply_plan(
     backoff: float = 1.0,
     id_column: str | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_add: Callable[[int, int], None] | None = None,
 ) -> WriteResult:
     """Apply (or dry-run) the **add** actions in `plan`.
 
     Only `add` is automated; `update`/`same`/`conflict` are ignored here.
     When `should_stop()` returns true, stop before the next action and mark
     `WriteResult.cancelled`; already-applied actions stay applied.
+
+    `on_add(done, total)` is called after each successful write (never on a
+    dry run or a failed write) so a caller can show live n/total progress;
+    `total` is the number of add actions planned, `done` counts applied ones.
     """
     res = WriteResult()
     id_col = id_column or (plan.actions[0].id_column if plan.actions else None)
 
     todo = [a for a in plan.actions if a.kind == "add"]
     res.planned = list(todo)
+    total = len(todo)
 
     if dry_run:
         for a in todo:
@@ -102,6 +108,8 @@ def apply_plan(
         wrote_since_sleep = True
         res.applied.append(action)
         res.counts[action.kind] = res.counts.get(action.kind, 0) + 1
+        if on_add is not None:
+            on_add(res.counts[action.kind], total)
 
     return res
 

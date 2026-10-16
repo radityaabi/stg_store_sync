@@ -183,6 +183,49 @@ class TestThrottle:
         assert slept == [0.01]
 
 
+class TestAddProgress:
+    """`on_add(done, total)` reports live add progress, one call per write."""
+
+    def test_on_add_called_per_applied_row(self):
+        c = FakeClient()
+        p = plan_with(
+            Action("add", "1", "No", 1, {"No": 1}),
+            Action("add", "2", "No", 2, {"No": 2}),
+            Action("add", "3", "No", 3, {"No": 3}),
+        )
+        seen = []
+        apply_plan(c, 17620, p, dry_run=False, on_add=lambda d, t: seen.append((d, t)))
+        assert seen == [(1, 3), (2, 3), (3, 3)]
+
+    def test_on_add_not_called_on_dry_run(self):
+        c = FakeClient()
+        p = plan_with(Action("add", "1", "No", 1, {"No": 1}))
+        seen = []
+        apply_plan(c, 17620, p, dry_run=True, on_add=lambda d, t: seen.append((d, t)))
+        assert seen == []
+
+    def test_on_add_skips_failed_write(self):
+        c = FakeClient(fail_on={"add_row"}, fail_times=99)
+        p = plan_with(
+            Action("add", "1", "No", 1, {"No": 1}),
+            Action("add", "2", "No", 2, {"No": 2}),
+        )
+        seen = []
+        apply_plan(c, 17620, p, dry_run=False, backoff=0,
+                   on_add=lambda d, t: seen.append((d, t)))
+        assert seen == []   # both failed → never counted
+
+    def test_total_counts_adds_only(self):
+        c = FakeClient()
+        p = plan_with(
+            upd("2", 2, "a", "b"),
+            Action("add", "1", "No", 1, {"No": 1}),
+        )
+        seen = []
+        apply_plan(c, 17620, p, dry_run=False, on_add=lambda d, t: seen.append((d, t)))
+        assert seen == [(1, 1)]
+
+
 class TestApplyUpdates:
     def test_fresh_proposal_is_applied(self):
         c = FakeClient(store_after=[{"No": 2, "SbjNum": "2", "Q32": "22", "Extra": "keep"}])

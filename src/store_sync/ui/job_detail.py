@@ -63,6 +63,7 @@ class JobDetail(QWidget):
         super().__init__(parent)
         self._history_ids: list[int] = []
         self._progress_lines: list[str] = []
+        self._add_line_ix: int | None = None
         self._survey_index: dict = {}
         self._paired_survey_id: str = ""
         self._build_ui()
@@ -460,17 +461,29 @@ class JobDetail(QWidget):
 
         `event` is `{"stage": ..., ...}`. The first event shows the panel;
         `stage == "done"` leaves it up so the operator can read the outcome.
+
+        `stage == "add"` is a **live counter**: its line is updated in place
+        rather than appended, so a 300-row write shows one climbing `n/total`
+        line instead of 300 lines.
         """
         stage = event.get("stage", "")
         if stage == "start":
             self._progress_lines = []
+            self._add_line_ix = None
             self.progress_text.setPlainText("")
             job = event.get("job", "")
             dry = " (dry run)" if event.get("dry_run") else ""
             self.progress_label.setText(f"run: {job}{dry}")
         line = _progress_line(event)
         if line:
-            self._progress_lines.append(line)
+            if stage == "add":
+                if self._add_line_ix is not None:
+                    self._progress_lines[self._add_line_ix] = line
+                else:
+                    self._progress_lines.append(line)
+                    self._add_line_ix = len(self._progress_lines) - 1
+            else:
+                self._progress_lines.append(line)
             self.progress_text.setPlainText("\n".join(self._progress_lines))
             # Keep the newest stage visible (setPlainText resets the cursor).
             self.progress_text.moveCursor(QTextCursor.End)
@@ -478,6 +491,7 @@ class JobDetail(QWidget):
 
     def clear_run_progress(self) -> None:
         self._progress_lines = []
+        self._add_line_ix = None
         self.progress_text.setPlainText("")
         self.progress_panel.hide()
 
@@ -556,6 +570,7 @@ _STAGE_TEXT = {
     "preflight": "checking readiness",
     "plan": "planning changes",
     "apply": "applying changes",
+    "add": "adding rows",
     "applied": "changes applied",
     "done": "finished",
 }
@@ -576,6 +591,8 @@ def _progress_line(event: dict) -> str:
     if stage == "apply":
         dry = " (dry run)" if event.get("dry_run") else ""
         return f"· {label}: {event.get('planned', 0)} action(s){dry}"
+    if stage == "add":
+        return f"· {label}: {event.get('done', 0)}/{event.get('total', 0)}"
     if stage == "applied":
         dry = " (dry run)" if event.get("dry_run") else ""
         return f"· {label}: {_fmt_counts(event.get('counts')) or 'nothing'}{dry}"

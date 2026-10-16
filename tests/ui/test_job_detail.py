@@ -210,6 +210,26 @@ def test_run_progress_cleared_and_hidden():
     assert d.progress_text.toPlainText() == ""
     assert d.progress_panel.isHidden()
 
+
+def test_add_progress_updates_one_line_in_place():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "apply", "dry_run": False, "planned": 296})
+    for n in (1, 2, 3, 296):
+        d.set_run_progress({"stage": "add", "done": n, "total": 296})
+    lines = [ln for ln in d.progress_text.toPlainText().splitlines() if ln.strip()]
+    # apply line + exactly one add line (updated in place, not appended per row)
+    assert len(lines) == 2
+    assert "296/296" in lines[-1]
+    assert lines[-1].count("adding") == 1
+
+
+def test_add_progress_line_format():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "add", "done": 5, "total": 296})
+    assert "5/296" in d.progress_text.toPlainText()
+
 def test_reload_clears_stale_pull_terms():
     d = JobDetail()
     d.load(E(), a_job())

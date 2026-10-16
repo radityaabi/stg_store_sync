@@ -170,5 +170,15 @@
 - [x] 14.6 Docs — invariant 15, spec §10, `CONTEXT.md`
 - [x] 14.7 Fixed pre-existing shadowed `TestNotificationWiring` (4 tests uncollected)
 
+## Phase 15 — Live add progress ✅ COMPLETE
+> During a live run the run console shows a single `adding rows: n/N` line that
+> climbs as adds are written, instead of only an end-of-run count.
+
+- [x] 15.1 `core/writer.py` — `apply_plan(on_add=...)` fires after each applied add
+- [x] 15.2 `core/sync.py` — forward as an `add` progress event (`done`/`total`)
+- [x] 15.3 `ui/job_detail.py` — `adding rows: n/N`, updated in place (one line)
+- [x] 15.4 Tests — writer callback, sync event, in-place UI line (551 green)
+- [x] 15.5 Docs — GUI redesign spec §5.2.1
+
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming

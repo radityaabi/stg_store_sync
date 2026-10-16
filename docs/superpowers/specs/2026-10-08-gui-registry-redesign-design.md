@@ -251,6 +251,14 @@ class RunQueue:
   (and stay tracked); the store is never left in an unknown state — it is a
   point-in-time partial, reported as such.
 
+### 5.2.1 Live add progress (`add` stage)
+
+`apply_plan` accepts `on_add(done, total)`, called after each successful write
+(never on a dry run or a failed write). `run_sync` forwards it as a progress
+event `{"stage": "add", "done": n, "total": N}`, where `N` is the number of
+planned adds. The GUI renders one line, updated **in place**, so a large write
+shows a single climbing `adding rows: n/N` line rather than one line per row.
+
 ### 5.3 Scheduler (`core/scheduler.py`) — superseded (interval model)
 
 > **Superseded** by
