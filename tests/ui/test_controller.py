@@ -304,10 +304,10 @@ def test_finished_run_toast_flags_dry_run(tmp_path):
     c.save("a", a_job(), schedule=Schedule(""), enabled=False)
     _seed_run(c, dry_run=True, counts={"add": 296, "delete": 1})
     w.show()  # child-overlay toasts need a visible window
-    c._active_prev = "a"  # pretend a run was in flight
+    c._active_prev = {"a"}  # pretend a run was in flight
     from store_sync.core.run_queue import QueueState
 
-    c._on_queue_changed(QueueState(active=None, pending=[]))
+    c._on_queue_changed(QueueState(active=[], pending=[]))
     toasts = [t for t in w.findChildren(Toast) if t.isVisible()]
     assert toasts, "expected a finished toast"
     assert "dry run" in toasts[0].text().lower()
@@ -1286,4 +1286,36 @@ def test_automap_rejects_an_empty_store(tmp_path, monkeypatch):
 
     assert w.job_detail.bindings() == []
     assert "empty store" in w.status_label.text().lower()
+    c.stop(); w.close()
+
+
+def test_two_finished_runs_produce_two_toasts(tmp_path):
+    from store_sync.ui.toast import Toast
+    from store_sync.core.run_queue import QueueState
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c.save("b", a_job(), schedule=Schedule(""), enabled=False)
+    _seed_run(c, job="a")
+    _seed_run(c, job="b")
+    w.show()
+    c._active_prev = {"a", "b"}
+    c._on_queue_changed(QueueState(active=[], pending=[]))
+    texts = [t.text() for t in w.findChildren(Toast) if t.isVisible()]
+    assert any('"a"' in t for t in texts)
+    assert any('"b"' in t for t in texts)
+    c.stop(); w.close()
+
+
+def test_run_now_passes_store_key(tmp_path):
+    seen = {}
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    real = c.queue.enqueue
+    c.queue.enqueue = lambda name, **kw: seen.update(name=name, **kw) or True
+    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
+    c.run_now("a")
+    assert seen["store_key"] == str(c.registry.get("a").store.id)
+    c.queue.enqueue = real
     c.stop(); w.close()

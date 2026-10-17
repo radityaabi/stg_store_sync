@@ -208,7 +208,7 @@ class Controller:
         self._detail_name: str | None = None
         self._started = False
         self._stopped = False
-        self._active_prev: str | None = None
+        self._active_prev: set[str] = set()
         # Per-job live progress buffers: `{job: [event, ...]}`. The open job's
         # detail panel replays its own buffer; another job's run never bleeds in.
         self._progress_by_job: dict[str, list[dict]] = {}
@@ -359,7 +359,17 @@ class Controller:
     # -- public API --------------------------------------------------------
 
     def run_now(self, name: str) -> None:
-        self.queue.enqueue(name)
+        """Start `name` now; refuse (with a status) if it or its store is busy."""
+        try:
+            job = self.registry.get(name)
+            store_key = str(job.store.id)
+        except KeyError:
+            return
+        if not self.queue.enqueue(name, store_key=store_key):
+            self.window.set_status(
+                f"{name} not started (already running, or store {store_key} busy)",
+                _STATUS_WARN,
+            )
 
     def save(self, name: str, job: JobConfig, *, schedule: Schedule,
              enabled: bool) -> bool:
@@ -532,13 +542,16 @@ class Controller:
 
     def _on_queue_changed(self, state) -> None:
         self.window.dashboard.set_queue(state.active, state.pending)
-        if state.active:
-            self.window.set_status(f"running {state.active}", _STATUS_WARN)
+        now_active = set(state.active)
+        if now_active:
+            self.window.set_status(
+                "running " + ", ".join(sorted(now_active)), _STATUS_WARN
+            )
         else:
             self.window.set_status("ready", _STATUS_OK)
-        # A run just finished → refresh the open job's History/Conflicts.
-        if self._active_prev is not None and state.active is None:
-            finished = self._active_prev
+        # Runs that just finished (this callback may report more than one) →
+        # one toast each, plus a History refresh for the open job.
+        for finished in sorted(self._active_prev - now_active):
             last = None
             try:
                 runs = self.state.recent_runs(finished)
@@ -562,9 +575,9 @@ class Controller:
                     f"{finished}: {status}" + (" (dry run)" if dry else ""),
                     _STATUS_OK if status == "ok" else _STATUS_FAIL,
                 )
-            if self._detail_name:
-                self._load_history(self._detail_name)
-        self._active_prev = state.active
+        if self._detail_name and self._detail_name in (self._active_prev - now_active):
+            self._load_history(self._detail_name)
+        self._active_prev = now_active
         self._refresh()
 
     def _on_due(self, name: str) -> None:
@@ -630,7 +643,7 @@ class Controller:
         dash.set_entries(entries, os_status=self._os_status(entries))
 
         snap = self.queue.snapshot()
-        running = 1 if snap.active else 0
+        running = len(snap.active)
         failed = sum(1 for e in entries if e.last_status == "error")
         enabled = sum(1 for e in entries if e.enabled)
         dash.set_stats(len(entries), enabled, running, failed)

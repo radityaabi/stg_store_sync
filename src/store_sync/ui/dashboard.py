@@ -186,10 +186,8 @@ class Dashboard(QWidget):
         """Show the friendly hint whenever the model has no rows."""
         self.empty_label.setVisible(self.model.rowCount() == 0)
 
-    def set_queue(self, active: str | None, pending: list[str]) -> None:
-        parts: list[str] = []
-        if active:
-            parts.append(f"▶ {active}")
+    def set_queue(self, active: list[str], pending: list[str]) -> None:
+        parts: list[str] = [f"▶ {name}" for name in active]
         parts.extend(f"• {name}" for name in pending)
         self.queue_label.setText("  ".join(parts) if parts else "idle")
 

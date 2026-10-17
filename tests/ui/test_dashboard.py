@@ -21,10 +21,10 @@ def test_rows_and_selection():
 
 def test_queue_strip_and_stats():
     d = Dashboard()
-    d.set_queue("a", ["b", "c"])
-    d.set_stats(total=3, enabled=2, running=1, failed=0)
-    assert "a" in d.queue_label.text()
-    assert "b" in d.queue_label.text()
+    d.set_queue(["a", "b"], ["c"])
+    d.set_stats(total=3, enabled=2, running=2, failed=0)
+    text = d.queue_label.text()
+    assert "a" in text and "b" in text and "c" in text
 
 
 def test_run_edit_delete_emit_selected_name():
