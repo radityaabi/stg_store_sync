@@ -285,3 +285,15 @@ class TestNotifications:
     def test_notification_for_run_is_none_when_absent(self, st):
         rid = st.start_run(job="j", dry_run=False)
         assert st.notification_for_run(rid) is None
+
+
+def test_connection_busy_timeout_allows_concurrent_writers(tmp_path):
+    """Concurrent runs hold write locks briefly; the wait must be 30 s, not 5."""
+    from store_sync.core.state import State
+
+    st = State(tmp_path / "s.db")
+    try:
+        busy_ms = st.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_ms >= 30_000
+    finally:
+        st.close()

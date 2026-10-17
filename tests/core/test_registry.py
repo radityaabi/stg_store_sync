@@ -341,3 +341,9 @@ def test_registry_migrates_old_db_notify_enabled_defaults_true(tmp_path):
     assert r.get_entry("old").notify_enabled is True
     assert r.get("old").notify_enabled is True
     r.close()
+
+def test_connection_busy_timeout_allows_concurrent_runs(tmp_path):
+    """A GUI run and a headless run can hold write locks briefly; wait 30 s."""
+    r = Registry(tmp_path / "reg.db")
+    assert r.conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 30_000
+    r.close()
