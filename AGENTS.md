@@ -90,11 +90,17 @@ Violating any of these corrupts production data or the safety model:
    source-side duplicate **skips** those rows (run → `partial`). Never guess.
 8. **Dry-run is the default.** A live write is an explicit operator choice.
 9. **The id value is immutable on update**; adds assign `max(id_column)+1`.
-10. **One global run queue** — exactly one sync at a time; never run two.
-11. **Headless = add-only.** CLI/scheduler runs write adds and record proposals;
-    they never apply updates. (The id-column **no-op probe** is exempt: it
+10. **Runs are concurrent across jobs; one run per job; never two against one
+    store.** Each accepted run gets its own worker thread, so a manual run of job
+    A never waits for job B. `enqueue` is refused while that job is already
+    active, and while another in-flight run holds the same `store.id` — a
+    same-store run would collide on `max(id_column)+1` (invariant 9). Stop is
+    per job (detail page); the dashboard Stop-all still stops every run.
+11. **Headless = serial and add-only.** CLI/scheduler runs write adds and record
+    proposals; they never apply updates. (GUI runs may be concurrent, each still
+    add-only.) The id-column **no-op probe** is exempt: it
     re-writes one row *unchanged* to verify the declared id column, and runs on
-    any live run that has at least one add — never on a dry-run.)
+    any live run that has at least one add — never on a dry-run.
 12. **The survey definition is read only by the Pairing action (prep), never
     during a run.** A job with no pairing — empty `survey_index`,
     `paired_survey_id != survey_id`, or any empty `pull_term` — is `blocked`

@@ -59,8 +59,10 @@ run without leaving orphaned threads or half-written-store surprises.
 2. In-app scheduler, **per-list interval schedules** (minute/hour/day/week —
    superseded from cron/minute granularity; see
    `2026-10-08-registration-and-schedule-redesign-design.md`).
-3. **Single global run queue** — one store syncs at a time; others wait. Stop
-   cancels the active run and marks it `cancelled`.
+3. **Concurrent run queue** — superseded by
+   `2026-10-17-concurrent-runs-design.md`: one run per job, concurrent across
+   jobs, never two runs against one store. Stop cancels one run (detail page) or
+   every run (dashboard) and marks it `cancelled`.
 4. Registry persisted in **SQLite**, extending the existing `state.db`.
 5. **Correctness fixes first**, then the GUI redesign on top.
 

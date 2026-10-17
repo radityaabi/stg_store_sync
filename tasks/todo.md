@@ -208,3 +208,17 @@
 - [x] 17.3 `gui.py` — off-GUI worker, merge/replace/cancel dialog, implicit pairing
 - [x] 17.4 Tests — core rules, button signal, controller merge/replace/cancel/empty (578 green)
 - [x] 17.5 Docs — README feature line, ledger
+
+## Phase 16 — Concurrent runs ✅ COMPLETE
+> Spec: `docs/superpowers/specs/2026-10-17-concurrent-runs-design.md`
+> Plan: `docs/superpowers/plans/2026-10-17-concurrent-runs.md`
+> Runs of different jobs execute in parallel; one run per job, never two against
+> one store, per-job stop, multi-active queue display.
+
+- [x] 16.1 `core/run_queue.py` — one thread per run, `QueueState.active: list[str]`
+- [x] 16.2 `core/run_queue.py` — same-store refusal
+- [x] 16.3 `core/state.py`/`registry.py` — 30 s SQLite lock timeout
+- [x] 16.4 `core/scheduler.py` — enqueue carries the store key
+- [x] 16.5 `gui.py`/`ui/dashboard.py` — multi-active status, per-run toasts, store-key enqueue
+- [x] 16.6 `gui.py`/`ui/main_window.py` — per-job stop
+- [x] 16.7 Docs — invariant 10/11, vocabulary, ledger

@@ -186,8 +186,10 @@ One execution of a job, recorded with a status (`ok` / `blocked` / `partial` /
 _Avoid_: execution, sync (unqualified).
 
 **Run queue**:
-The single global worker that runs jobs one at a time, with cooperative stop.
-_Avoid_: worker pool, thread pool.
+The per-run scheduler of work: each accepted job runs on its own thread, one run
+per job at a time, never two runs against one store, with cooperative per-run
+stop.
+_Avoid_: worker pool, thread pool, daemon.
 
 **Scheduler**:
 The in-process tick loop that enqueues enabled jobs when their interval
