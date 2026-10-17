@@ -1,48 +1,76 @@
-"""Tests for store_sync.core.run_queue — one active run, FIFO, dedupe."""
+"""Tests for store_sync.core.run_queue — concurrent per-job runs, dedupe, per-job stop."""
 import threading, time
 from store_sync.core.run_queue import RunQueue
 
-def test_runs_one_at_a_time_and_dedupes():
-    ran, gate = [], threading.Event()
+def test_two_jobs_run_concurrently():
+    gates = {"a": threading.Event(), "b": threading.Event()}
+    both = threading.Barrier(3, timeout=5)
     def run_fn(name, should_stop):
-        ran.append(name)
-        gate.wait(2)
+        both.wait()                      # both runs must be in flight at once
+        gates[name].wait(5)
         return name
     q = RunQueue(run_fn)
     q.start()
     assert q.enqueue("a") is True
-    assert q.enqueue("a") is False        # dedupe
     assert q.enqueue("b") is True
-    time.sleep(0.05)
-    assert q.snapshot().active == "a"
-    assert "b" in q.snapshot().pending
-    gate.set()
-    time.sleep(0.2)
+    both.wait()
+    assert sorted(q.snapshot().active) == ["a", "b"]
+    gates["a"].set(); gates["b"].set()
     q.shutdown()
-    assert ran == ["a", "b"]
+    assert q.snapshot().active == []
 
-def test_stop_current_sets_flag():
-    seen = {}
-    started = threading.Event()
+def test_same_job_deduped():
+    gate = threading.Event()
+    q = RunQueue(lambda name, stop: gate.wait(5))
+    q.start()
+    assert q.enqueue("a") is True
+    assert q.enqueue("a") is False
+    gate.set()
+    q.shutdown()
+
+def test_stop_current_only_stops_named():
+    stopped = set(); release = threading.Event()
     def run_fn(name, should_stop):
-        started.set()
         while not should_stop():
             time.sleep(0.01)
-        seen["stopped"] = True
+        stopped.add(name)
+        release.wait(5)
         return name
     q = RunQueue(run_fn)
     q.start()
-    q.enqueue("a")
-    started.wait(2)
-    q.stop_current()
-    time.sleep(0.1)
+    q.enqueue("a"); q.enqueue("b")
+    deadline = time.monotonic() + 2
+    while sorted(q.snapshot().active) != ["a", "b"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    q.stop_current("a")
+    deadline = time.monotonic() + 2
+    while "a" not in stopped and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert stopped == {"a"}
+    assert "b" in q.snapshot().active     # b untouched
+    release.set()
+    q.stop_all()
     q.shutdown()
-    assert seen.get("stopped") is True
 
+def test_stop_current_without_name_stops_all():
+    stopped = set()
+    def run_fn(name, should_stop):
+        while not should_stop():
+            time.sleep(0.01)
+        stopped.add(name)
+        return name
+    q = RunQueue(run_fn)
+    q.start()
+    q.enqueue("a"); q.enqueue("b")
+    q.stop_current()
+    deadline = time.monotonic() + 2
+    while len(stopped) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert stopped == {"a", "b"}
+    q.shutdown()
 
 def test_stop_all_drops_pending_and_stops_active():
-    started = threading.Event()
-    finished = threading.Event()
+    started = threading.Event(); finished = threading.Event()
     def run_fn(name, should_stop):
         started.set()
         while not should_stop():
@@ -53,67 +81,72 @@ def test_stop_all_drops_pending_and_stops_active():
     q.start()
     q.enqueue("a")
     started.wait(2)
-    q.enqueue("b")
-    assert q.snapshot().active == "a"
-    assert q.snapshot().pending == ["b"]
     q.stop_all()
-    assert q.snapshot().pending == []              # pending dropped
-    assert finished.wait(2)                         # active run saw should_stop
+    assert finished.wait(2)
+    assert q.snapshot().pending == []
     q.shutdown()
-    assert q.snapshot().active is None
-
+    assert q.snapshot().active == []
 
 def test_subscribe_called_on_every_change():
-    seen_states = []
+    seen = []
     gate = threading.Event()
-    def run_fn(name, should_stop):
-        gate.wait(2)
-        return name
-    q = RunQueue(run_fn)
-    q.subscribe(seen_states.append)
+    q = RunQueue(lambda name, stop: gate.wait(5))
+    q.subscribe(seen.append)
     q.start()
     assert q.enqueue("a") is True
-    time.sleep(0.1)                                 # let the worker start the run
-    assert seen_states                                  # called at least once
-    assert any(s.active == "a" for s in seen_states)    # saw the active job
+    deadline = time.monotonic() + 2
+    while not any("a" in s.active for s in seen) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert any("a" in s.active for s in seen)
     gate.set()
     q.shutdown()
-    assert seen_states[-1].active is None               # final change observed
+    assert seen[-1].active == []
 
+def test_shutdown_joins_every_run():
+    release = threading.Event()
+    q = RunQueue(lambda name, stop: release.wait(5))
+    q.start()
+    q.enqueue("a"); q.enqueue("b"); q.enqueue("c")
+    deadline = time.monotonic() + 2
+    while len(q.snapshot().active) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    release.set()
+    q.shutdown()
+    assert q.snapshot().active == []
+    assert q._threads == {}
 
 def test_shutdown_is_bounded_when_idle():
-    q = RunQueue(lambda name, should_stop: name)
+    q = RunQueue(lambda name, stop: name)
     q.start()
     before = time.monotonic()
     q.shutdown(timeout=2.0)
-    assert time.monotonic() - before < 1.0              # returns promptly
+    assert time.monotonic() - before < 1.0
 
-
-def test_shutdown_before_start_does_not_queue_stale_sentinel():
+def test_shutdown_before_start_is_safe():
     gate = threading.Event()
-    q = RunQueue(lambda name, should_stop: gate.wait(2))
-    q.shutdown()                                        # no worker yet
-    q.start()
-    assert q.enqueue("a") is True
-    time.sleep(0.1)
-    assert q.snapshot().active == "a"                   # worker not wedged
-    gate.set()
+    q = RunQueue(lambda name, stop: gate.wait(5))
     q.shutdown()
-
+    q.start()
+    assert q.enqueue("a") is False        # closed for good
+    gate.set()
 
 def test_shutdown_bounded_when_run_ignores_stop():
-    started = threading.Event()
-    release = threading.Event()
+    started = threading.Event(); release = threading.Event()
     def run_fn(name, should_stop):
         started.set()
-        release.wait(5)                                 # ignores should_stop
+        release.wait(5)                   # ignores should_stop
         return name
     q = RunQueue(run_fn)
     q.start()
     q.enqueue("a")
     started.wait(2)
     before = time.monotonic()
-    q.shutdown(timeout=0.2)                             # must not hang
+    q.shutdown(timeout=0.2)
     assert time.monotonic() - before < 2.0
     release.set()
 
+def test_enqueue_after_shutdown_returns_false():
+    q = RunQueue(lambda name, stop: name)
+    q.start()
+    q.shutdown()
+    assert q.enqueue("a") is False

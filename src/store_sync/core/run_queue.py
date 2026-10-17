@@ -1,99 +1,131 @@
-"""RunQueue — one global worker thread driving sync runs one at a time.
+"""RunQueue — one worker thread per accepted run, concurrent across jobs.
 
-A single daemon worker consumes names from a FIFO queue. At most one run is
-active at any moment; queued names are de-duplicated against the active run and
-the pending set. Cooperative cancellation flows through a per-run
-`threading.Event` that the `should_stop` predicate passed to `run_fn` reads; the
-event is cleared before each run so a later run starts un-cancelled.
+Runs are **concurrent across jobs**: each accepted name gets its own daemon
+thread, so a manual run of job A never waits for job B. Two things are still
+exclusive:
+
+* one run per job at a time — a name already active (or not yet entered the
+  worker) is not enqueued twice; and
+* **never two runs against one store** — `enqueue` takes an optional
+  `store_key` (the job's `store.id`); a key already held by another in-flight
+  run refuses the enqueue, because the `add` path assigns the id as
+  `max(id_column)+1` from the store snapshot read at run start.
+
+Cancellation is cooperative: every run owns a `threading.Event` that the
+`should_stop` predicate passed to `run_fn` reads. `stop_current(name)` trips
+just that run's event; `stop_current()` (no name) trips them all; `stop_all()`
+also drops anything still pending. `shutdown()` closes the queue for good and
+joins every worker under one bounded deadline.
 """
 from __future__ import annotations
 
 import logging
-import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-_SENTINEL = object()
-
 
 @dataclass
 class QueueState:
-    active: Optional[str]
+    active: list = field(default_factory=list)
     pending: list = field(default_factory=list)
 
 
 class RunQueue:
-    """Single-worker FIFO run queue with dedupe and cooperative stop."""
+    """Per-run worker threads: concurrent across jobs, serial per job and store."""
 
     def __init__(self, run_fn: Callable[[str, Callable[[], bool]], object], *, poll: float = 0.05):
         self._run_fn = run_fn
         self._poll = poll
         self._lock = threading.Lock()
-        self._queue: "queue.Queue" = queue.Queue()
-        self._active: Optional[str] = None
+        self._active: dict[str, threading.Event] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._store_keys: dict[str, str] = {}
         self._pending: list[str] = []
-        self._stop_event = threading.Event()
         self._subscribers: list[Callable[[QueueState], None]] = []
-        self._thread: Optional[threading.Thread] = None
+        self._started = False
+        self._closed = False
 
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
-        """Spawn the worker thread (idempotent)."""
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._thread = threading.Thread(target=self._worker, name="run-queue", daemon=True)
-        self._thread.start()
+        """Mark the queue usable (idempotent); workers spawn on `enqueue`."""
+        with self._lock:
+            self._started = True
 
     def shutdown(self, *, timeout: float = 5.0) -> None:
-        """Signal the active run, wake the worker, and join it (bounded).
+        """Close the queue, signal every run, and join all under `timeout`.
 
-        The join is bounded so a run that ignores `should_stop` cannot wedge
-        shutdown forever; if the worker is still alive after `timeout` we return
-        anyway (the thread is a daemon). The sentinel is only queued when a
-        worker exists, so `shutdown()` before `start()` (or a second
-        `shutdown()`) cannot leave a stale sentinel that would later stop a
-        freshly restarted worker on its first `get()`.
+        The join budget is shared: `timeout` bounds the whole shutdown, not each
+        thread. A run that ignores `should_stop` cannot wedge shutdown forever —
+        the workers are daemons, so we return anyway once the budget is spent.
+        After this call `enqueue` returns False for good.
         """
-        self._stop_event.set()
         with self._lock:
+            self._closed = True
             self._pending.clear()
-        thread = self._thread
-        if thread is not None:
-            self._queue.put(_SENTINEL)
-            thread.join(timeout=timeout)
-            self._thread = None
+            events = list(self._active.values())
+            threads = list(self._threads.values())
+        for ev in events:
+            ev.set()
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
+        with self._lock:
+            self._threads.clear()
+            self._active.clear()
+            self._store_keys.clear()
         self._notify()
 
     # -- public API --------------------------------------------------------
 
-    def enqueue(self, name: str, *, reason: str = "manual") -> bool:
-        """Queue `name`; return False if already active or pending."""
+    def enqueue(
+        self, name: str, *, reason: str = "manual", store_key: Optional[str] = None
+    ) -> bool:
+        """Start `name`; return False if deduped, store-busy, or closed."""
         with self._lock:
-            if name == self._active or name in self._pending:
+            if self._closed:
+                return False
+            if name in self._active or name in self._pending:
+                return False
+            if store_key is not None and store_key in self._store_keys.values():
                 return False
             self._pending.append(name)
-        self._queue.put(name)
+            if store_key is not None:
+                self._store_keys[name] = store_key
+            thread = threading.Thread(
+                target=self._worker, args=(name, store_key), name=f"run-{name}", daemon=True
+            )
+            self._threads[name] = thread
         self._notify()
+        thread.start()
         return True
 
-    def stop_current(self) -> None:
-        """Ask the active run to stop by tripping its `should_stop` event."""
-        self._stop_event.set()
+    def stop_current(self, name: Optional[str] = None) -> None:
+        """Trip one run's stop event, or every active run when `name` is None."""
+        with self._lock:
+            if name is None:
+                events = list(self._active.values())
+            else:
+                ev = self._active.get(name)
+                events = [ev] if ev is not None else []
+        for ev in events:
+            ev.set()
 
     def stop_all(self) -> None:
-        """Ask the active run to stop and drop everything still pending."""
+        """Ask every active run to stop and drop everything still pending."""
+        self.stop_current()
         with self._lock:
-            self._stop_event.set()
             self._pending.clear()
         self._notify()
 
     def snapshot(self) -> QueueState:
         with self._lock:
-            return QueueState(active=self._active, pending=list(self._pending))
+            return QueueState(active=list(self._active), pending=list(self._pending))
 
     def subscribe(self, cb: Callable[[QueueState], None]) -> None:
         """Register `cb(QueueState)` called on every change."""
@@ -109,27 +141,34 @@ class RunQueue:
         for cb in subs:
             cb(snap)
 
-    def _worker(self) -> None:
-        while True:
-            item = self._queue.get()
-            if item is _SENTINEL:
-                # Shutdown was requested; stop the worker mid-run-safe.
-                return
-            with self._lock:
-                if item not in self._pending:
-                    # Dropped by stop_all (or never registered) — skip.
-                    continue
-                self._pending.remove(item)
-                self._active = item
-            self._stop_event.clear()
+    def _worker(self, name: str, store_key: Optional[str]) -> None:
+        event = threading.Event()
+        with self._lock:
+            if self._closed:
+                # Shutdown raced the spawn: never start a run after closing.
+                if name in self._pending:
+                    self._pending.remove(name)
+                self._threads.pop(name, None)
+                self._store_keys.pop(name, None)
+                closed = True
+            else:
+                closed = False
+                if name in self._pending:
+                    self._pending.remove(name)
+                self._active[name] = event
+        if closed:
             self._notify()
-            try:
-                self._run_fn(item, self._stop_event.is_set)
-            except Exception:
-                # A failed run must not kill the worker; the run's own layer
-                # records status. Keep draining the queue.
-                logger.exception("run_queue: run %r raised; worker continues", item)
-            finally:
-                with self._lock:
-                    self._active = None
-                self._notify()
+            return
+        self._notify()
+        try:
+            self._run_fn(name, event.is_set)
+        except Exception:
+            # A failed run must not affect any other run; the run's own layer
+            # records status.
+            logger.exception("run_queue: run %r raised; other runs continue", name)
+        finally:
+            with self._lock:
+                self._active.pop(name, None)
+                self._threads.pop(name, None)
+                self._store_keys.pop(name, None)
+            self._notify()
