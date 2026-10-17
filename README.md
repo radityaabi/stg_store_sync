@@ -18,6 +18,12 @@ the STG REST API.
   not exist**.
 - Columns are mapped by an operator-approved `source → store` alias pair (or an
   **Excel mapping upload**); the pull term is derived, not hand-entered.
+- **Auto-map** (⚡ in the **Columns** tab) fills the whole grid in one click: the
+  store's columns from a single `GetStore` plus the survey index from the XML
+  (cached pairing reused, no import/export round-trip). Matching is exact name,
+  then a question base name with exactly one answer var; an ambiguous or unknown
+  column is left blank and reported, never guessed. Existing bindings can be
+  merged or replaced; nothing is saved until Save.
 - **Pairing**: a job must be paired in the **Columns** tab (the 🔗 action) before
   its first run; pairing reads the survey definition once and caches the pull
   terms. An unpaired job is blocked.

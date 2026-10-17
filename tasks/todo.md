@@ -194,3 +194,17 @@
 
 ## Out of scope (this iteration)
 - Multi-store fan-out; auto-mapping without approval; real-time streaming
+
+## Phase 17 — One-click column auto-map ✅ COMPLETE
+> The ⚡ **Auto-map columns** button in the Columns tab fills the grid in one
+> click: store columns from a single `GetStore` + the survey index (cached
+> pairing reused, else one XML fetch — pairing stored implicitly). Matching is
+> exact name, then a question base name with exactly one answer var; ambiguous
+> or unknown columns stay blank and are reported. Merge / Replace / Cancel when
+> the grid is non-empty. Nothing is saved until Save.
+
+- [x] 17.1 `core/automap.py` — `auto_map(store_cols, index, skip, existing, merge)`
+- [x] 17.2 `ui/job_detail.py` + `ui/main_window.py` — ⚡ button + `automap_requested`
+- [x] 17.3 `gui.py` — off-GUI worker, merge/replace/cancel dialog, implicit pairing
+- [x] 17.4 Tests — core rules, button signal, controller merge/replace/cancel/empty (578 green)
+- [x] 17.5 Docs — README feature line, ledger

@@ -352,6 +352,13 @@ def test_pairing_button_emits_signal(detail):
     assert seen == [1]
 
 
+def test_automap_button_emits_signal(detail):
+    seen = []
+    detail.automap_requested.connect(lambda: seen.append(1))
+    detail.automap_button.click()
+    assert seen == [1]
+
+
 def test_set_pairing_stores_index_and_terms(detail):
     detail.set_pairing("SURV", {"T_QPM1_1": "QPM1"}, {"T_QPM1_1": "QPM1"})
     assert detail.config_fields()["paired_survey_id"] == "SURV"

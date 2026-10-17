@@ -473,6 +473,7 @@ class Controller:
         w.delete_requested.connect(self._confirm_delete)
         w.save_requested.connect(self._save_from_detail)
         w.pair_requested.connect(self._pair_survey)
+        w.automap_requested.connect(self._automap_columns)
         w.import_requested.connect(self._import_mapping)
         w.export_requested.connect(self._export_mapping)
         w.refresh_requested.connect(self._refresh)
@@ -746,7 +747,9 @@ class Controller:
         for key in keys:
             self.state.unblacklist_key(name, key)
         self._load_blacklist(name)
-        self.window.set_status(f"unblacklisted {len(keys)} key(s)", _STATUS_OK)
+        self.window.set_status(
+            f"unblacklisted {len(keys)} key(s) — will re-add on next run", _STATUS_OK
+        )
 
     def _load_proposals(self, name: str) -> None:
         """Fill the Proposed-updates tab with this job's pending proposals."""
@@ -1007,6 +1010,136 @@ class Controller:
         msg = _short(exc)
         self.window.set_status(f"pairing error: {msg}", _STATUS_FAIL)
         self.window.toast(f"Pairing error: {msg}", kind="fail")
+
+    # -- one-click column auto-map ----------------------------------------
+
+    def _automap_columns(self) -> None:
+        """Fill the column grid from the store's columns + the survey index.
+
+        One click replaces the manual export/fill/import/pair loop: the store's
+        column list comes from a single `GetStore`, the source var for each
+        column from the survey index (cached pairing, else one XML fetch — the
+        pairing is then stored implicitly). `core.automap.auto_map` does the
+        matching: exact name, then a question base name with exactly one answer
+        var; anything ambiguous is left unmapped and reported rather than
+        guessed. Nothing is saved here — the operator reviews the grid and hits
+        Save, exactly like a manual edit.
+        """
+        from store_sync.core.automap import auto_map
+        from store_sync.core.fetcher import parse_survey_index
+        from store_sync.core.stg_client import STGError
+
+        w = self.window
+        detail = w.job_detail
+        try:
+            job = self._job_from_detail()
+        except ValueError:
+            logger.exception("controller: invalid config for auto-map")
+            w.set_status("config error", _STATUS_FAIL)
+            w.toast("Config error — check the form fields", kind="fail")
+            return
+        try:
+            client = self._client()
+        except Exception:  # noqa: BLE001 - surface any failure to operator
+            logger.exception("controller: auto-map client failed")
+            w.set_status("auto-map error", _STATUS_FAIL)
+            w.toast("Auto-map error: could not build STG client (check .env)",
+                    kind="fail")
+            return
+
+        survey_id = job.source.survey_id
+        cached_index = dict(job.source.survey_index)
+        cached = (
+            cached_index
+            if cached_index and job.source.paired_survey_id == survey_id
+            else None
+        )
+        existing = detail.bindings()
+        match = job.binding.match
+        skip = {
+            job.store.id_column,
+            match.store_col if match else "",
+            match.source_var if match else "",
+        }
+        w.set_status("auto-mapping columns...", _STATUS_WARN)
+
+        def work():
+            try:
+                store_cols = self._store_cols_of(client, job)
+                index = cached if cached is not None else parse_survey_index(
+                    client.get_survey_xml(survey_id)
+                )
+            finally:
+                self._close_client(client)
+            if not store_cols:
+                raise STGError("store has no columns (empty store?)")
+            return (
+                survey_id,
+                index,
+                auto_map(store_cols, index, skip=skip, existing=existing),
+            )
+
+        worker = _NetworkWorker(work)
+        worker.ok.connect(self._on_automap_ok)
+        worker.failed.connect(self._on_automap_error)
+        self._start_worker("_mapping_thread", worker, label="auto-map")
+
+    def _on_automap_ok(self, result) -> None:
+        survey_id, index, res = result
+        w = self.window
+        detail = w.job_detail
+
+        merge = True
+        if detail.bindings():
+            answer = QMessageBox.question(
+                w,
+                "Auto-map columns",
+                f"The Columns tab already has {len(detail.bindings())} binding(s).\n\n"
+                f"Merge — keep existing source vars, add/fill the rest\n"
+                f"Replace — rebuild the grid from the store + survey\n"
+                f"Cancel — leave the grid untouched\n\n"
+                f"Auto-map found {res.mapped}/{res.total} column(s).",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Cancel:
+                w.set_status("auto-map cancelled", _STATUS_WARN)
+                return
+            merge = answer == QMessageBox.Yes
+
+        if not merge:
+            # Rebuild from scratch: the previous grid is discarded entirely.
+            from store_sync.core.automap import auto_map
+
+            res = auto_map(
+                [c.store_col for c in res.columns], index, merge=False
+            )
+
+        detail.binding_model.set_columns(res.columns)
+        detail.set_pairing(
+            survey_id, index, {c.source_var: c.pull_term for c in res.columns}
+        )
+
+        if res.unmapped:
+            w.set_status(
+                f"auto-mapped {res.mapped}/{res.total} · {len(res.unmapped)} unmapped",
+                _STATUS_WARN,
+            )
+            shown = ", ".join(res.unmapped[:6])
+            more = "" if len(res.unmapped) <= 6 else f" +{len(res.unmapped) - 6} more"
+            w.toast(
+                f"Auto-mapped {res.mapped}/{res.total}. No source var for: "
+                f"{shown}{more} — fill by hand, then Save",
+                kind="warn",
+            )
+        else:
+            w.set_status(f"auto-mapped {res.mapped}/{res.total}", _STATUS_OK)
+            w.toast("Columns auto-mapped — review, then Save", kind="ok")
+
+    def _on_automap_error(self, exc) -> None:
+        msg = _short(exc)
+        self.window.set_status(f"auto-map error: {msg}", _STATUS_FAIL)
+        self.window.toast(f"Auto-map error: {msg}", kind="fail")
 
     # -- mapping import / export -------------------------------------------
 

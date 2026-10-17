@@ -1122,3 +1122,168 @@ def test_sync_os_schedule_reports_status(tmp_path, monkeypatch):
     )
     c.sync_os_schedule()   # must not raise
     c.stop(); w.close()
+
+# -- one-click column auto-map ----------------------------------------------
+
+class _AutoMapClient:
+    """Fake client exposing a store's columns and a survey XML."""
+
+    def __init__(self, rows, xml="<Survey/>"):
+        self.rows = rows
+        self.xml = xml
+        self.calls = []
+
+    def get_store(self, store_id):
+        self.calls.append(("get_store", store_id))
+        return list(self.rows)
+
+    def get_survey_xml(self, survey_id):
+        self.calls.append(("get_survey_xml", survey_id))
+        return self.xml
+
+
+def _automap_setup(w, c):
+    w.job_detail.load(_entry(), a_job())
+    w.job_detail.binding_model.set_columns([])
+    c._detail_name = "a"
+
+
+def test_automap_fills_the_grid_and_stores_pairing(tmp_path, monkeypatch):
+    import store_sync.core.fetcher as fetcher
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    _automap_setup(w, c)
+    client = _AutoMapClient([
+        {"No": 1, "SbjNum": "101", "Q32": 11, "I7_1_2": "Alice"},
+    ])
+    monkeypatch.setattr(c, "_client", lambda: client)
+    monkeypatch.setattr(
+        fetcher, "parse_survey_index", lambda xml: {"Q32": "Q32"}
+    )
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    cols = w.job_detail.bindings()
+    # id column + match store col are never bindable; store order kept.
+    assert [x.store_col for x in cols] == ["Q32", "I7_1_2"]
+    assert [x.source_var for x in cols] == ["Q32", ""]
+    fields = w.job_detail.config_fields()
+    assert fields["paired_survey_id"] == "SURV"
+    assert fields["survey_index"] == {"Q32": "Q32"}
+    assert "unmapped" in w.status_label.text().lower()
+    c.stop(); w.close()
+
+
+def test_automap_reuses_cached_pairing_without_another_xml_fetch(
+    tmp_path, monkeypatch
+):
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    job = a_job()
+    job.source.survey_index = {"Q32": "Q32"}
+    job.source.paired_survey_id = "SURV"
+    w.job_detail.load(_entry(), job)
+    w.job_detail.binding_model.set_columns([])
+    c._detail_name = "a"
+
+    client = _AutoMapClient([{"No": 1, "SbjNum": "101", "Q32": 11}])
+    monkeypatch.setattr(c, "_client", lambda: client)
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    assert ("get_survey_xml", "SURV") not in client.calls   # cached
+    assert [x.source_var for x in w.job_detail.bindings()] == ["Q32"]
+    c.stop(); w.close()
+
+
+def test_automap_merge_keeps_manual_source_var(tmp_path, monkeypatch):
+    import store_sync.core.fetcher as fetcher
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    _automap_setup(w, c)
+    w.job_detail.binding_model.set_columns(
+        [ColumnBinding("T_Q32_SPECIAL", "Q32")]
+    )
+    monkeypatch.setattr(c, "_client", lambda: _AutoMapClient([
+        {"No": 1, "SbjNum": "101", "Q32": 11},
+    ]))
+    monkeypatch.setattr(fetcher, "parse_survey_index", lambda xml: {"Q32": "Q32"})
+    monkeypatch.setattr(
+        "store_sync.gui.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Yes),   # Merge
+    )
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    assert [x.source_var for x in w.job_detail.bindings()] == ["T_Q32_SPECIAL"]
+    c.stop(); w.close()
+
+
+def test_automap_replace_rebuilds_from_the_index(tmp_path, monkeypatch):
+    import store_sync.core.fetcher as fetcher
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    _automap_setup(w, c)
+    w.job_detail.binding_model.set_columns(
+        [ColumnBinding("T_Q32_SPECIAL", "Q32")]
+    )
+    monkeypatch.setattr(c, "_client", lambda: _AutoMapClient([
+        {"No": 1, "SbjNum": "101", "Q32": 11},
+    ]))
+    monkeypatch.setattr(fetcher, "parse_survey_index", lambda xml: {"Q32": "Q32"})
+    monkeypatch.setattr(
+        "store_sync.gui.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.No),    # Replace
+    )
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    assert [x.source_var for x in w.job_detail.bindings()] == ["Q32"]
+    c.stop(); w.close()
+
+
+def test_automap_cancel_leaves_the_grid_untouched(tmp_path, monkeypatch):
+    import store_sync.core.fetcher as fetcher
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    _automap_setup(w, c)
+    w.job_detail.binding_model.set_columns([ColumnBinding("KEEP", "Q32")])
+    monkeypatch.setattr(c, "_client", lambda: _AutoMapClient([
+        {"No": 1, "SbjNum": "101", "Q32": 11},
+    ]))
+    monkeypatch.setattr(fetcher, "parse_survey_index", lambda xml: {"Q32": "Q32"})
+    monkeypatch.setattr(
+        "store_sync.gui.QMessageBox.question",
+        staticmethod(lambda *a, **k: QMessageBox.Cancel),
+    )
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    assert [x.source_var for x in w.job_detail.bindings()] == ["KEEP"]
+    c.stop(); w.close()
+
+
+def test_automap_rejects_an_empty_store(tmp_path, monkeypatch):
+    import store_sync.core.fetcher as fetcher
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    _automap_setup(w, c)
+    monkeypatch.setattr(c, "_client", lambda: _AutoMapClient([]))
+    monkeypatch.setattr(fetcher, "parse_survey_index", lambda xml: {"Q32": "Q32"})
+
+    c._automap_columns()
+    _drain(c, "_mapping_thread")
+
+    assert w.job_detail.bindings() == []
+    assert "empty store" in w.status_label.text().lower()
+    c.stop(); w.close()

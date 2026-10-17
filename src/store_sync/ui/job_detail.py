@@ -56,6 +56,7 @@ class JobDetail(QWidget):
     apply_proposals_requested = Signal(list)
     dismiss_proposals_requested = Signal(list)
     pair_requested = Signal()
+    automap_requested = Signal()
     blacklist_add_requested = Signal(str)
     blacklist_remove_requested = Signal(list)
 
@@ -192,8 +193,16 @@ class JobDetail(QWidget):
         self.pair_button = QPushButton("🔗 Pair with survey XML")
         self.pair_button.setObjectName("btn_warning")
         self.pair_button.clicked.connect(self.pair_requested.emit)
+        self.automap_button = QPushButton("⚡ Auto-map columns")
+        self.automap_button.setObjectName("btn_primary")
+        self.automap_button.setToolTip(
+            "Fill the grid from the store's columns and the survey XML — "
+            "one click, no import/export"
+        )
+        self.automap_button.clicked.connect(self.automap_requested.emit)
         bar.addWidget(self.add_column_button)
         bar.addWidget(self.remove_column_button)
+        bar.addWidget(self.automap_button)
         bar.addStretch(1)
         bar.addWidget(self.pair_button)
         bar.addWidget(self.import_button)

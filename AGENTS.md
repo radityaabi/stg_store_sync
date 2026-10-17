@@ -14,7 +14,7 @@ default.**
 Standalone repo — **never import from `stg_automation_suite`** (or any sibling
 repo). Reference only.
 
-Status: core + GUI + CLI implemented; **533 tests green**; not yet enabled for a
+Status: core + GUI + CLI implemented; **578 tests green**; not yet enabled for a
 live write. See `tasks/todo.md` for the phase ledger.
 
 ## Stack & layout
@@ -102,9 +102,13 @@ Violating any of these corrupts production data or the safety model:
 13. **Deleted rows are blacklisted, not re-added.** A match key this system has
     written (`tracked`) that is absent from the store was deleted by hand; the
     next run suppresses its `add` and records it in the per-job `blacklist`
-    (state DB). A blacklisted key back in the store is auto-cleared. An empty
-    store snapshot is *unknown*, not a mass deletion. Suppression applies to
-    `add` only, is never an error, and is recorded on dry-run too.
+    (state DB). An operator removal from the blacklist (GUI/CLI) also **forgets
+    that key's `tracked` record**, so the next run plans the `add` again — a
+    removal never gets re-detected as a fresh deletion. Auto-clear (key back in
+    the store) keeps tracking, so a second hand-deletion is still caught. A
+    blacklisted key back in the store is auto-cleared. An empty store snapshot is
+    *unknown*, not a mass deletion. Suppression applies to `add` only, is never an
+    error, and is recorded on dry-run too.
 
 14. **OS-level scheduling only wakes the run; `is_due` is the schedule.**
     One OS task per enabled, scheduled job (`schedule sync`) runs
