@@ -147,7 +147,10 @@ _Avoid_: skip, drop.
 The per-job set of match keys that must not be re-added. A key enters it
 automatically when a previously-written key disappears from the store (deleted
 by hand), and is cleared automatically when the key reappears in the store. The
-operator can also add or remove a key by hand. Suppresses `add` only.
+operator can also add or remove a key by hand — **removing a key also forgets its
+`tracked` record**, so the next run adds it again instead of re-detecting the
+same deletion (auto-clear keeps tracking, so a second deletion is still seen).
+Suppresses `add` only.
 _Avoid_: ignore list, skip list, delete policy.
 
 **OS schedule** (OS task):

@@ -205,6 +205,26 @@ class TestBlacklist:
         assert added == set()
         assert st.blacklisted_keys("j") == set()
 
+    def test_unblacklist_forgets_tracking_so_it_is_not_rediscovered(self, st):
+        # The operator removing a key means "re-sync it". Without forgetting the
+        # tracking record the next reconcile re-derives the same deletion and
+        # puts the key straight back into the blacklist.
+        st.track_row(job="j", match_value="104", row_hash="h")
+        assert st.reconcile_blacklist("j", {"101", "102"})[0] == {"104"}
+        st.unblacklist_key("j", "104")                 # operator decision
+        assert st.tracked_keys("j") == set()
+        assert st.reconcile_blacklist("j", {"101", "102"})[0] == set()
+        assert st.blacklisted_keys("j") == set()
+
+    def test_auto_clear_keeps_tracking_so_a_second_deletion_is_detected(self, st):
+        # Auto-clear is not an operator decision: a key re-added by hand stays
+        # tracked, so deleting it again by hand is still detected.
+        st.track_row(job="j", match_value="104", row_hash="h")
+        st.blacklist_key("j", "104", reason="deleted")
+        assert st.reconcile_blacklist("j", {"101", "104"})[1] == {"104"}
+        assert st.tracked_keys("j") == {"104"}
+        assert st.reconcile_blacklist("j", {"101"})[0] == {"104"}
+
     def test_reblacklist_preserves_added_at(self, st):
         st.blacklist_key("j", "104", reason="deleted")
         st.conn.execute(

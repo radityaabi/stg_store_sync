@@ -105,6 +105,16 @@ Given the job and the set of match-key values currently in the store snapshot:
 `removed ⊆ store_keys`), so the order of the two writes does not matter. Both
 happen in one call; the caller passes the store snapshot it already has.
 
+**Removal is sticky (one-shot detection).** Auto-detection is a set difference,
+so it re-derives the *same* deletion on every run while the key stays in
+`tracked`. An operator removal (`unblacklist_key` from the GUI tab or
+`blacklist-remove`) therefore also deletes that key's `tracked` row
+(`forget_tracking=True`, the default): once the operator has said "re-sync this
+key", the next run plans the `add` and nothing re-blacklists it. Auto-clear
+(pass 4) calls `unblacklist_key(..., forget_tracking=False)` — it is not an
+operator decision, and keeping the record means a *second* hand-deletion of the
+same key is still detected.
+
 **Only tracked keys are auto-blacklisted.** A store row the system never wrote
 (e.g. a legacy row, or one the operator added then deleted in Studio) is not
 detectable as "deleted" — there is no record it ever existed. The manual path

@@ -547,6 +547,22 @@ class TestBlacklist:
         assert st.blacklisted_keys("link1") == set()     # auto-cleared
         assert res.suppressed == 0
 
+    def test_operator_unblacklist_allows_the_key_to_be_readded(self, st):
+        st.track_row(job="link1", match_value="104", row_hash="h")
+        c1 = FakeClient(store=store_rows(), subjects=subjects())
+        first = run_sync(config(dry_run=False), client=c1, state=st, throttle=0, backoff=0)
+        assert first.suppressed == 1
+        assert st.blacklisted_keys("link1") == {"104"}
+
+        st.unblacklist_key("link1", "104")             # operator says: re-sync it
+        c2 = FakeClient(store=store_rows(), subjects=subjects())
+        res = run_sync(config(dry_run=False), client=c2, state=st, throttle=0, backoff=0)
+        added = [v["SbjNum"] for k, v in c2.calls if k == "add"]
+        assert added == ["104"]
+        assert res.suppressed == 0
+        assert st.blacklisted_keys("link1") == set()
+        assert "104" in st.tracked_keys("link1")
+
     def test_untracked_absent_key_is_not_blacklisted(self, st):
         # 103 is in the store but not in the source; it was never tracked.
         c = FakeClient(store=store_rows(), subjects=subjects())

@@ -281,11 +281,27 @@ class State:
         )
         self.conn.commit()
 
-    def unblacklist_key(self, job: str, match_value) -> None:
+    def unblacklist_key(
+        self, job: str, match_value, *, forget_tracking: bool = True
+    ) -> None:
+        """Remove a key from the blacklist.
+
+        `forget_tracking` (default, the operator path) also drops the `tracked`
+        record: reconcile auto-detects deletions as `tracked - store_keys`, so a
+        key left tracked would be re-blacklisted by the very next run and the
+        operator's "re-sync this" decision would never stick. Auto-clear from
+        `reconcile_blacklist` passes `False` — it is not an operator decision,
+        and keeping the tracking record means a second deletion is still seen.
+        """
         self.conn.execute(
             "DELETE FROM blacklist WHERE job = ? AND match_value = ?",
             (job, str(match_value)),
         )
+        if forget_tracking:
+            self.conn.execute(
+                "DELETE FROM tracked WHERE job = ? AND match_value = ?",
+                (job, str(match_value)),
+            )
         self.conn.commit()
 
     def blacklisted_keys(self, job: str) -> set[str]:
@@ -311,6 +327,11 @@ class State:
         hand); `removed = blacklisted & store_keys` (a suppressed key re-added by
         hand). The two sets are disjoint, so write order is irrelevant.
 
+        Auto-clear keeps the `tracked` record (`forget_tracking=False`): it is not
+        an operator decision, so a second hand-deletion of the same key is still
+        detected. Only `unblacklist_key` from the GUI/CLI forgets tracking, which
+        is what makes "remove from blacklist" mean "re-sync this key".
+
         An **empty** `store_keys` means the snapshot is *unknown* (an empty or
         malformed `GetStore` response, or a store lacking the match column), not
         a mass deletion — a bad read must never blacklist every tracked key, so
@@ -326,7 +347,7 @@ class State:
         for key in added:
             self.blacklist_key(job, key, reason="deleted")
         for key in removed:
-            self.unblacklist_key(job, key)
+            self.unblacklist_key(job, key, forget_tracking=False)
         return added, removed
 
     # -- OS due marker -----------------------------------------------------
