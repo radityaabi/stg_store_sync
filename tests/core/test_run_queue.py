@@ -150,3 +150,32 @@ def test_enqueue_after_shutdown_returns_false():
     q.start()
     q.shutdown()
     assert q.enqueue("a") is False
+
+def test_same_store_refused():
+    gate = threading.Event()
+    q = RunQueue(lambda name, stop: gate.wait(5))
+    q.start()
+    assert q.enqueue("a", store_key="1") is True
+    assert q.enqueue("b", store_key="1") is False   # same store: refused
+    assert q.enqueue("b", store_key="2") is True    # different store: allowed
+    gate.set()
+    q.shutdown()
+
+def test_store_key_released_after_run():
+    q = RunQueue(lambda name, stop: None)
+    q.start()
+    assert q.enqueue("a", store_key="1") is True
+    deadline = time.monotonic() + 2
+    while q.snapshot().active and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert q.enqueue("b", store_key="1") is True    # reservation released
+    q.shutdown()
+
+def test_store_key_without_store_is_unconstrained():
+    gate = threading.Event()
+    q = RunQueue(lambda name, stop: gate.wait(5))
+    q.start()
+    assert q.enqueue("a") is True
+    assert q.enqueue("b") is True
+    gate.set()
+    q.shutdown()
