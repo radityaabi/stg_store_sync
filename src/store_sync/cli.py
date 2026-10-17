@@ -212,12 +212,16 @@ def _client_from_env() -> STGClient | None:
 
 
 def _close_client(client) -> None:
-    session = getattr(client, "session", None)
-    if session is not None:
-        try:
+    closer = getattr(client, "close", None)
+    try:
+        if callable(closer):
+            closer()
+            return
+        session = getattr(client, "session", None)
+        if session is not None:
             session.close()
-        except Exception:  # noqa: BLE001 - best-effort cleanup
-            pass
+    except Exception:  # noqa: BLE001 - best-effort cleanup
+        pass
 
 
 def _status_line(name: str, res) -> str:

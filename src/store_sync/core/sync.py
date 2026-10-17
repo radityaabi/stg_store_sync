@@ -214,6 +214,7 @@ def _run_sync_inner(
                 survey_index=index,
                 should_stop=should_stop,
                 on_chunk=lambda done, total: _emit("pull_chunk", done=done, total=total),
+                on_fallback=lambda reason: _emit("pull_fallback", reason=reason),
             )
         except Cancelled:
             _finish("cancelled", {})
@@ -222,7 +223,13 @@ def _run_sync_inner(
                 plan=p, dry_run=dry_run, status="cancelled", counts={},
                 errors=errors, run_id=run_id,
             )
-        _emit("pull", total=len(pulled.records))
+        _emit(
+            "pull",
+            total=len(pulled.records),
+            fell_back=pulled.fell_back,
+            seconds=pulled.seconds,
+            requests=pulled.requests,
+        )
 
         # 2) load the store --------------------------------------------------
         store_rows = client.get_store(config.store.id)

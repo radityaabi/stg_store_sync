@@ -10,7 +10,9 @@ returns parsed JSON. Retries apply to GETs that STG is known to drop mid-stream
 from __future__ import annotations
 
 import os
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any, Callable, Iterable, Sequence
 
 import requests
@@ -28,13 +30,21 @@ _RETRYABLE = (ChunkedEncodingError, ProtocolError, ReqConnectionError)
 
 DEFAULT_TIMEOUT = 120
 EXPORT_TIMEOUT = 300
-# 100 comes from the proven pull script (`tasks/plan.md`): STG drops long
-# chunked bodies mid-transfer, so bigger chunks are riskier per request. It is a
-# *round-trip* trade-off, though — one request per 100 ids means 16 sequential
-# POSTs for a 1569-interview survey — so an operator can raise it per install
-# without touching code.
-DEFAULT_EXPORT_CHUNK = 100
+# 100 is the server's hard ceiling, not a preference: `/SimpleExport` rejects a
+# request carrying more than 100 subject IDs with `200 {"Error": ...,
+# "Description": "Incorrect Input: Too many Subject IDs"}`. Any larger value is
+# clamped (see `_chunk_setting`) so a bad env var can never silently shrink a
+# pull — the rejection parses as "no rows", which would look like a clean run.
+MAX_EXPORT_CHUNK = 100
+DEFAULT_EXPORT_CHUNK = MAX_EXPORT_CHUNK
 EXPORT_CHUNK_ENV = "STG_EXPORT_CHUNK"
+# Chunks are independent requests, so the pull is latency-bound: one round-trip
+# per 100 ids, ~16 for a 1500-interview survey. A small pool overlaps those
+# round-trips without stressing the server (measured: 3.1x at 4 workers, 3.2x at
+# 8, degrading by 12).
+DEFAULT_EXPORT_WORKERS = 4
+EXPORT_WORKERS_ENV = "STG_EXPORT_WORKERS"
+MAX_EXPORT_WORKERS = 8
 
 
 class STGError(RuntimeError):
@@ -57,6 +67,7 @@ class STGClient:
         max_retries: int = 3,
         backoff: float = 5.0,
         export_chunk: int | None = None,
+        export_workers: int | None = None,
     ):
         if not server:
             raise ValueError("server is required")
@@ -67,23 +78,76 @@ class STGClient:
         self.max_retries = max(1, int(max_retries))
         self.backoff = backoff
         self.export_chunk = max(1, int(self._chunk_setting(export_chunk)))
+        self.export_workers = max(1, int(self._workers_setting(export_workers)))
         self.headers = {"Accept": "application/json"}
+        # A `requests.Session` is not thread-safe, so each pull worker gets its
+        # own. An injected session (tests, callers with a transport) is shared
+        # as-is: they own its lifecycle.
+        self._injected_session = session is not None
+        self._local = threading.local()
+        self._worker_sessions: list[Any] = []
+        self._sessions_lock = threading.Lock()
 
     # -- transport ---------------------------------------------------------
 
     @staticmethod
     def _chunk_setting(explicit: int | None) -> int:
-        """Export chunk size: explicit arg → `STG_EXPORT_CHUNK` → 100.
+        """Export chunk size: explicit arg → `STG_EXPORT_CHUNK` → 100, clamped.
+
+        The server rejects more than `MAX_EXPORT_CHUNK` subject IDs per request
+        and reports it as a 200 whose body has no `Subjects`, so an oversized
+        chunk reads back as zero rows. Clamping is a correctness guard: no
+        setting may exceed what the server accepts.
 
         A malformed env value is ignored rather than fatal (a typo must not
         break every run); an explicit arg always wins.
         """
-        if explicit is not None:
-            return explicit
-        raw = os.environ.get(EXPORT_CHUNK_ENV, "").strip()
-        if raw.isdigit() and int(raw) > 0:
-            return int(raw)
-        return DEFAULT_EXPORT_CHUNK
+        value = explicit
+        if value is None:
+            raw = os.environ.get(EXPORT_CHUNK_ENV, "").strip()
+            if raw.isdigit() and int(raw) > 0:
+                value = int(raw)
+        if value is None:
+            return DEFAULT_EXPORT_CHUNK
+        return min(int(value), MAX_EXPORT_CHUNK)
+
+    @staticmethod
+    def _workers_setting(explicit: int | None) -> int:
+        """Concurrent export workers: explicit arg → env → 4, clamped to 1..8."""
+        value = explicit
+        if value is None:
+            raw = os.environ.get(EXPORT_WORKERS_ENV, "").strip()
+            if raw.isdigit() and int(raw) > 0:
+                value = int(raw)
+        if value is None:
+            return DEFAULT_EXPORT_WORKERS
+        return max(1, min(int(value), MAX_EXPORT_WORKERS))
+
+    def _session(self) -> Any:
+        """Session for the calling thread (own session per worker)."""
+        if self._injected_session:
+            return self.session
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            self._local.session = session
+            with self._sessions_lock:
+                self._worker_sessions.append(session)
+        return session
+
+    def close(self) -> None:
+        """Close the shared session and every per-thread worker session."""
+        with self._sessions_lock:
+            extras, self._worker_sessions = self._worker_sessions, []
+        for session in extras:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001 - closing must never raise
+                pass
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
@@ -101,7 +165,7 @@ class STGClient:
         attempts = self.max_retries if retry else 1
         for attempt in range(1, attempts + 1):
             try:
-                r = self.session.get(
+                r = self._session().get(
                     url,
                     params=params,
                     auth=self.auth,
@@ -118,7 +182,7 @@ class STGClient:
         raise last_exc
 
     def _post(self, path: str, params: dict[str, Any] | None = None) -> JSON:
-        r = self.session.post(
+        r = self._session().post(
             self._url(path),
             params=params,
             auth=self.auth,
@@ -154,7 +218,7 @@ class STGClient:
 
     def get_survey_xml(self, survey_id: str, *, timeout: int = 180) -> str:
         """Return the survey definition XML (used to derive pull terms)."""
-        r = self.session.get(
+        r = self._session().get(
             self._url(f"/Surveys/GetSurveyXML/{survey_id}"),
             params=None,
             auth=self.auth,
@@ -210,36 +274,93 @@ class STGClient:
         chunk: int | None = None,
         should_stop: Callable[[], bool] | None = None,
         on_chunk: Callable[[int, int], None] | None = None,
+        workers: int | None = None,
     ) -> list[dict]:
-        """Pull subjects via /SimpleExport, chunked and retried per chunk.
+        """Pull subjects via /SimpleExport, chunked, retried, and concurrent.
 
-        Returns the flat list of subject objects (`{SubjectID, Columns:[...]}`).
-        When `should_stop()` returns true, raise `Cancelled` before the next
-        chunk (cooperative mid-pull cancellation).
+        Returns the flat list of subject objects (`{SubjectID, Columns:[...]}`),
+        in the caller's id order regardless of which chunk landed first.
+
+        Chunks are independent requests, so they run on a small thread pool
+        (`export_workers`, default 4): the pull is latency-bound, and one
+        round-trip per 100 ids means 16 sequential waits for a 1500-interview
+        survey. Retries stay per chunk.
+
+        When `should_stop()` returns true, raise `Cancelled` before dispatching
+        the next chunk (cooperative mid-pull cancellation).
 
         `on_chunk(done_ids, total_ids)` is called after each chunk lands, so a
-        multi-minute pull can report live progress instead of looking hung.
+        multi-minute pull can report live progress instead of looking hung; the
+        counter is cumulative, so it only ever climbs.
         """
         ids = [str(s) for s in subject_ids]
         if not ids:
             return []
-        size = max(1, int(chunk if chunk is not None else self.export_chunk))
-        out: list[dict] = []
-        for i in range(0, len(ids), size):
-            if should_stop and should_stop():
-                raise Cancelled()
+        size = max(1, min(int(chunk if chunk is not None else self.export_chunk),
+                          MAX_EXPORT_CHUNK))
+        spans = [(i, min(i + size, len(ids))) for i in range(0, len(ids), size)]
+        n_workers = max(1, min(int(workers if workers is not None else self.export_workers),
+                               len(spans)))
+
+        def fetch(span: tuple[int, int]) -> list[dict]:
+            start, end = span
             params: dict[str, Any] = {
                 "surveyID": survey_id,
-                "subjectIDs": ",".join(ids[i : i + size]),
+                "subjectIDs": ",".join(ids[start:end]),
             }
             if variable_names:
                 params["variableNames"] = ",".join(str(v) for v in variable_names)
             if include_nulls is not None:
                 params["includeNulls"] = str(include_nulls).lower()
             data = self._get("/SimpleExport", params, timeout=EXPORT_TIMEOUT, retry=True)
-            out.extend(self._as_subjects(data))
-            if on_chunk is not None:
-                on_chunk(min(i + size, len(ids)), len(ids))
+            return self._as_subjects(data)
+
+        if n_workers == 1:
+            out: list[dict] = []
+            for span in spans:
+                if should_stop and should_stop():
+                    raise Cancelled()
+                out.extend(fetch(span))
+                if on_chunk is not None:
+                    on_chunk(span[1], len(ids))
+            return out
+
+        results: dict[int, list[dict]] = {}
+        done = 0
+        pending = iter(enumerate(spans))
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            in_flight = {}
+            exhausted = False
+            while True:
+                while not exhausted and len(in_flight) < n_workers:
+                    if should_stop and should_stop():
+                        for fut in in_flight:
+                            fut.cancel()
+                        raise Cancelled()
+                    try:
+                        ix, span = next(pending)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    in_flight[pool.submit(fetch, span)] = (ix, span)
+                if not in_flight:
+                    break
+                finished, _ = wait(list(in_flight), return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    ix, span = in_flight.pop(fut)
+                    try:
+                        results[ix] = fut.result()
+                    except BaseException:
+                        for other in in_flight:
+                            other.cancel()
+                        raise
+                    done += span[1] - span[0]
+                    if on_chunk is not None:
+                        on_chunk(done, len(ids))
+
+        out = []
+        for ix in range(len(spans)):
+            out.extend(results.get(ix) or [])
         return out
 
     # -- writes ------------------------------------------------------------

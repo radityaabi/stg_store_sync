@@ -17,12 +17,14 @@ Flow (spec §2.8 / §7.2 / probe F7–F10):
 """
 from __future__ import annotations
 
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from store_sync.core.binding import project
 from store_sync.core.config import ColumnBinding
+from store_sync.core.stg_client import DEFAULT_EXPORT_CHUNK, MAX_EXPORT_CHUNK
 
 
 @dataclass
@@ -32,6 +34,16 @@ class PullResult:
     pull_terms: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     fell_back: bool = False
+    # Why the filtered pull was abandoned (empty when `fell_back` is False).
+    # A fallback is legitimate but ~15x the bytes and time of the filtered
+    # pull, so it must be visible in the run log instead of silently inflating
+    # a run.
+    fallback_reason: str = ""
+    # Wall-clock seconds for the pull (both attempts on a fallback), and how
+    # many export requests that took — the two numbers that decide whether a
+    # slow run is the network or the pipeline.
+    seconds: float = 0.0
+    requests: int = 0
 
 
 # --- survey index -----------------------------------------------------------
@@ -186,9 +198,15 @@ def pull(
     survey_index: dict[str, str] | None = None,
     columns: list[ColumnBinding] | None = None,
     on_chunk: Callable[[int, int], None] | None = None,
+    on_fallback: Callable[[str], None] | None = None,
     **export_kwargs,
 ) -> PullResult:
-    """Pull, flatten, optionally project. See module docstring for the steps."""
+    """Pull, flatten, optionally project. See module docstring for the steps.
+
+    `on_fallback(reason)` is called when the filtered pull is abandoned for a
+    full export, so the caller can surface it (the run log must never hide a
+    fallback — it is ~15x the payload of a filtered pull).
+    """
     index = survey_index or {}
     res = PullResult()
 
@@ -198,10 +216,26 @@ def pull(
 
     # A filter is only safe when every needed var has a base-name term.
     use_filter = bool(source_vars) and not unresolved
+
+    def _note_fallback(reason: str) -> None:
+        res.fell_back = True
+        res.fallback_reason = reason
+        if on_fallback is not None:
+            on_fallback(reason)
+
     if not use_filter and source_vars:
         # Could not build a safe filter → full export (correct, just heavier).
-        res.fell_back = True
+        _note_fallback(
+            "unresolved source var(s): " + ", ".join(unresolved)
+        )
 
+    size = export_kwargs.get("chunk") or getattr(
+        client, "export_chunk", DEFAULT_EXPORT_CHUNK
+    )
+    size = max(1, min(int(size), MAX_EXPORT_CHUNK))
+    chunk_count = (len(subject_ids) + size - 1) // size
+
+    started = time.perf_counter()
     subjects = client.simple_export(
         survey_id,
         subject_ids,
@@ -210,19 +244,27 @@ def pull(
         **export_kwargs,
     )
     records = [flatten_subject(s) for s in subjects]
+    requests = chunk_count
 
     # Verify the filter kept every needed term's family. Presence is checked at
     # the base-name level over the whole pull — a var absent from some subjects
     # is normal skip logic (probe F7), not a filter failure.
     if use_filter:
         needed_bases = set(terms)
-        if not needed_bases.issubset(_base_names(records, index)):
+        missing = needed_bases - _base_names(records, index)
+        if missing:
             subjects = client.simple_export(
                 survey_id, subject_ids, variable_names=None, **export_kwargs
             )
             records = [flatten_subject(s) for s in subjects]
-            res.fell_back = True
+            requests += chunk_count
+            _note_fallback(
+                "server dropped " + ", ".join(sorted(missing))
+                + " from the filtered export"
+            )
 
+    res.seconds = round(time.perf_counter() - started, 3)
+    res.requests = requests
     res.records = records
     if columns:
         res.projected = [project(columns, rec) for rec in records]

@@ -453,9 +453,13 @@ class Controller:
 
     @staticmethod
     def _close_client(client: STGClient) -> None:
-        """Close the client's `requests.Session` (STGClient has no `close()`)."""
+        """Close the client and every session it opened (shared + per worker)."""
         try:
-            client.session.close()
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                closer()
+            else:  # pragma: no cover - older/injected clients
+                client.session.close()
         except Exception:  # noqa: BLE001
             logger.debug("error closing STG client session", exc_info=True)
 

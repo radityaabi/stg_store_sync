@@ -578,6 +578,7 @@ _STAGE_TEXT = {
     "ids": "listing interviews",
     "pull": "pulling interview data",
     "pull_chunk": "pulling interview data",
+    "pull_fallback": "falling back to a full export",
     "store": "reading store",
     "preflight": "checking readiness",
     "plan": "planning changes",
@@ -595,7 +596,21 @@ def _progress_line(event: dict) -> str:
     if stage == "ids":
         return f"· {label}: {event.get('total', 0)} interview(s)"
     if stage == "pull":
-        return f"· {label}: {event.get('total', 0)} record(s)"
+        total = event.get("total", 0)
+        reqs = event.get("requests")
+        secs = event.get("seconds")
+        detail = []
+        if reqs:
+            detail.append(f"{reqs} request(s)")
+        if secs is not None:
+            detail.append(f"{float(secs):.1f}s")
+        tail = f" ({', '.join(detail)})" if detail else ""
+        warn = ""
+        if event.get("fell_back"):
+            warn = " — full export, the variable filter was dropped"
+        return f"· {label}: {total} record(s){tail}{warn}"
+    if stage == "pull_fallback":
+        return f"· {label}: {event.get('reason', 'unknown reason')}"
     if stage == "pull_chunk":
         return f"· {label}: {event.get('done', 0)}/{event.get('total', 0)}"
     if stage == "store":

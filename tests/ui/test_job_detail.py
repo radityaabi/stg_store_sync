@@ -252,6 +252,39 @@ def test_chunk_line_does_not_swallow_the_add_line():
     text = d.progress_text.toPlainText()
     assert "3/3" in text and "1/2" in text
 
+
+def test_pull_line_reports_requests_and_seconds():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "start", "job": "j", "dry_run": True})
+    d.set_run_progress({"stage": "pull", "total": 1572, "requests": 16, "seconds": 67.4})
+    line = d.progress_text.toPlainText().splitlines()[-1]
+    assert "1572" in line and "16 request(s)" in line and "67.4s" in line
+    assert "full export" not in line
+
+
+def test_pull_line_warns_on_full_export_fallback():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "start", "job": "j", "dry_run": True})
+    d.set_run_progress({
+        "stage": "pull", "total": 100, "requests": 2, "seconds": 130.9,
+        "fell_back": True,
+    })
+    line = d.progress_text.toPlainText().splitlines()[-1]
+    assert "full export" in line
+
+
+def test_fallback_reason_gets_its_own_line():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "start", "job": "j", "dry_run": True})
+    d.set_run_progress({"stage": "pull_fallback", "reason": "server dropped QPM1"})
+    d.set_run_progress({"stage": "pull", "total": 3, "fell_back": True})
+    lines = [ln for ln in d.progress_text.toPlainText().splitlines() if ln.strip()]
+    assert len(lines) == 3
+    assert "QPM1" in lines[1]
+
 def test_reload_clears_stale_pull_terms():
     d = JobDetail()
     d.load(E(), a_job())

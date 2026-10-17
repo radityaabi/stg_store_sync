@@ -184,16 +184,47 @@ class TestSimpleExport:
         assert c.export_chunk == 100
 
     def test_chunk_size_reads_env_override(self, monkeypatch):
+        monkeypatch.setenv("STG_EXPORT_CHUNK", "60")
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]))
+        assert c.export_chunk == 60
+
+    def test_oversized_chunk_is_clamped_to_server_ceiling(self, monkeypatch):
+        # The server rejects >100 subject IDs per request with a 200 whose body
+        # carries no Subjects, which reads back as zero rows. Clamping keeps a
+        # bad setting from turning a pull into a silent no-op.
         monkeypatch.setenv("STG_EXPORT_CHUNK", "500")
         c = STGClient(server="https://stg.example.com", user="u", password="p",
                       session=FakeSession([]))
-        assert c.export_chunk == 500
+        assert c.export_chunk == 100
 
     def test_explicit_chunk_beats_env_override(self, monkeypatch):
-        monkeypatch.setenv("STG_EXPORT_CHUNK", "500")
+        monkeypatch.setenv("STG_EXPORT_CHUNK", "60")
         c = STGClient(server="https://stg.example.com", user="u", password="p",
                       session=FakeSession([]), export_chunk=42)
         assert c.export_chunk == 42
+
+    def test_explicit_oversized_chunk_is_clamped(self):
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]), export_chunk=1000)
+        assert c.export_chunk == 100
+
+    def test_oversized_call_chunk_is_clamped(self, client_and_session):
+        c, s = client_and_session
+        s._responses = [FakeResponse(200, [])]
+        c.simple_export("S", ["1"], chunk=500)
+        _, _, params, *_ = s.calls[0]
+        assert params["subjectIDs"] == "1"
+
+    def test_workers_default_and_clamp(self, monkeypatch):
+        monkeypatch.delenv("STG_EXPORT_WORKERS", raising=False)
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]))
+        assert c.export_workers == 4
+        assert STGClient(server="https://stg.example.com", user="u", password="p",
+                         session=FakeSession([]), export_workers=99).export_workers == 8
+        assert STGClient(server="https://stg.example.com", user="u", password="p",
+                         session=FakeSession([]), export_workers=0).export_workers == 1
 
     def test_malformed_env_chunk_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv("STG_EXPORT_CHUNK", "many")
@@ -265,6 +296,107 @@ class TestSimpleExport:
         c, s = client_and_session
         s._responses = [FakeResponse(200, [])]
         assert c.simple_export("S", ["1"]) == []
+
+
+class DictSession:
+    """Thread-safe fake: answers per requested id, in any order."""
+
+    def __init__(self, rows_for, delay=0.0, fail_on=None):
+        import threading
+
+        self.rows_for = rows_for
+        self.delay = delay
+        self.fail_on = fail_on or set()
+        self.calls = []
+        self._lock = threading.Lock()
+
+    def get(self, url, params=None, auth=None, headers=None, timeout=None):
+        import time as _time
+
+        ids = params["subjectIDs"].split(",")
+        with self._lock:
+            self.calls.append(ids)
+        if self.delay:
+            _time.sleep(self.delay)
+        for sid in ids:
+            if sid in self.fail_on:
+                raise ChunkedEncodingError(f"dropped {sid}")
+        return FakeResponse(200, [
+            {"SubjectID": sid, "Columns": [{"Var": "x", "Value": sid}]} for sid in ids
+        ])
+
+    def post(self, url, params=None, auth=None, headers=None, timeout=None):
+        raise AssertionError("no writes expected")
+
+    def close(self):
+        pass
+
+
+class TestParallelExport:
+    @staticmethod
+    def _client(session, **kw):
+        return STGClient(server="https://h", user="u", password="p",
+                         session=session, max_retries=1, backoff=0, **kw)
+
+    def test_chunks_never_exceed_the_server_ceiling(self):
+        s = DictSession({})
+        c = self._client(s, export_chunk=100, export_workers=4)
+        c.simple_export("S", [str(i) for i in range(250)])
+        assert [len(call) for call in s.calls]
+        assert all(len(call) <= 100 for call in s.calls)
+        assert sorted(len(call) for call in s.calls) == [50, 100, 100]
+
+    def test_result_keeps_caller_id_order_despite_completion_order(self):
+        # Chunks land out of order; the returned list must not.
+        s = DictSession({}, delay=0.01)
+        c = self._client(s, export_chunk=1, export_workers=4)
+        out = c.simple_export("S", ["5", "1", "4", "2", "3"])
+        assert [r["SubjectID"] for r in out] == ["5", "1", "4", "2", "3"]
+
+    def test_progress_is_cumulative_and_ends_at_total(self):
+        s = DictSession({})
+        c = self._client(s, export_chunk=10, export_workers=4)
+        seen = []
+        c.simple_export("S", [str(i) for i in range(95)], on_chunk=lambda d, t: seen.append(d))
+        assert seen == sorted(seen)          # only climbs
+        assert seen[-1] == 95
+
+    def test_concurrent_chunks_overlap(self):
+        # 4 chunks of 1 id, each sleeping 100ms: serial would be ~400ms.
+        import time
+
+        s = DictSession({}, delay=0.1)
+        c = self._client(s, export_chunk=1, export_workers=4)
+        t = time.perf_counter()
+        c.simple_export("S", ["1", "2", "3", "4"])
+        assert time.perf_counter() - t < 0.35
+
+    def test_workers_one_stays_serial(self):
+        s = DictSession({})
+        c = self._client(s, export_chunk=2, export_workers=1)
+        out = c.simple_export("S", ["1", "2", "3"])
+        assert [r["SubjectID"] for r in out] == ["1", "2", "3"]
+
+    def test_cancelled_before_dispatch(self):
+        from store_sync.core.stg_client import Cancelled
+
+        s = DictSession({})
+        c = self._client(s, export_chunk=1, export_workers=4)
+        calls = {"n": 0}
+
+        def stop():
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        with pytest.raises(Cancelled):
+            c.simple_export("S", ["1", "2", "3", "4", "5", "6"], should_stop=stop)
+        assert len(s.calls) < 6
+
+    def test_failure_in_one_chunk_propagates(self):
+        s = DictSession({}, fail_on={"3"})
+        c = self._client(s, export_chunk=1, export_workers=2)
+        with pytest.raises(ChunkedEncodingError):
+            c.simple_export("S", ["1", "2", "3", "4"])
 
 
 class TestRetry:

@@ -332,6 +332,59 @@ class TestProgress:
         assert events and all(e.get("job") == "link1" for e in events)
         assert events[0]["stage"] == "start"
 
+    def test_pull_event_carries_timing_and_fallback_flag(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        pull = [e for e in events if e["stage"] == "pull"][0]
+        assert pull["fell_back"] is False
+        assert pull["requests"] >= 1
+        assert pull["seconds"] >= 0
+
+    def test_fallback_is_announced_before_the_pull_line(self, st):
+        # A dropped term triggers the full-export fallback; the run log must say
+        # so instead of leaving a 15x payload invisible.
+        class FilteringClient(FakeClient):
+            index = _PAIRED_INDEX
+
+            def simple_export(self, survey_id, ids, *, variable_names=None, **kw):
+                self.calls.append(("export", variable_names))
+                terms = set(variable_names or [])
+                out = []
+                for s in self.subjects:
+                    if s["SubjectID"] not in ids:
+                        continue
+                    if variable_names is None:
+                        out.append(s)
+                        continue
+                    kept = [
+                        c for c in s["Columns"]
+                        if self.index.get(c["Var"], c["Var"]) in terms
+                    ]
+                    if kept:
+                        out.append({"SubjectID": s["SubjectID"], "Columns": kept})
+                return out
+
+        subs = [
+            subj("1", [("SbjNum", 1), ("Q32", 4)]),   # T_QPM1_1 absent entirely
+            subj("2", [("SbjNum", 2), ("Q32", 7)]),
+            subj("3", [("SbjNum", 3), ("Q32", 8)]),
+        ]
+        c = FilteringClient(
+            store=[{"No": 1, "SbjNum": "1", "I7_1_2": "", "Q32": 4}],
+            subjects=subs,
+        )
+        events = []
+        run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
+        stages = [e["stage"] for e in events]
+        assert "pull_fallback" in stages
+        assert stages.index("pull_fallback") < stages.index("pull")
+        fb = [e for e in events if e["stage"] == "pull_fallback"][0]
+        assert "QPM1" in fb["reason"]
+        pull = [e for e in events if e["stage"] == "pull"][0]
+        assert pull["fell_back"] is True
+        assert pull["requests"] == 2      # filtered attempt + full retry
+
     def test_cancelled_run_status_and_tracking(self, st):
         subs = subjects() + [
             subj("5", [("SbjNum", 105), ("T_QPM1_1", "Eve"), ("Q32", 55)]),

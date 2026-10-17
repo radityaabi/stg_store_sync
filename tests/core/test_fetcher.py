@@ -233,6 +233,66 @@ class TestPull:
         assert res.fell_back is True
         assert c.calls[-1]["variable_names"] is None
 
+    def test_fallback_reason_names_the_dropped_term(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient([subject("1", [("SbjNum", 1), ("Q32", 4)])])
+        res = pull(
+            c, "S", ["1"], source_vars=["T_QPM1_1", "Q32"],
+            match_var="SbjNum", survey_index=idx,
+        )
+        assert "QPM1" in res.fallback_reason
+        assert res.fell_back is True
+
+    def test_unresolved_var_fallback_reason_lists_the_var(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient(full_subjects())
+        res = pull(
+            c, "S", ["1"], source_vars=["I_351_Q46a"],
+            match_var="SbjNum", survey_index=idx,
+        )
+        assert "I_351_Q46a" in res.fallback_reason
+
+    def test_no_fallback_reason_on_a_clean_filtered_pull(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient(full_subjects(), idx)
+        res = pull(
+            c, "S", ["1", "2"], source_vars=["T_QPM1_1", "Q32"],
+            match_var="SbjNum", survey_index=idx,
+        )
+        assert res.fell_back is False
+        assert res.fallback_reason == ""
+
+    def test_on_fallback_fires_once_with_the_reason(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient([subject("1", [("SbjNum", 1), ("Q32", 4)])])
+        reasons = []
+        pull(
+            c, "S", ["1"], source_vars=["T_QPM1_1", "Q32"],
+            match_var="SbjNum", survey_index=idx,
+            on_fallback=reasons.append,
+        )
+        assert len(reasons) == 1
+        assert "QPM1" in reasons[0]
+
+    def test_reports_request_count_and_seconds(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient(full_subjects(), idx)
+        res = pull(
+            c, "S", [str(i) for i in range(1, 251)], source_vars=["T_QPM1_1"],
+            match_var="SbjNum", survey_index=idx, chunk=100,
+        )
+        assert res.requests == 3          # ceil(250 / 100)
+        assert res.seconds >= 0
+
+    def test_fallback_doubles_the_request_count(self):
+        idx = parse_survey_index(SURVEY_XML)
+        c = FakeClient([subject(str(i), [("SbjNum", i), ("Q32", 4)]) for i in range(1, 151)])
+        res = pull(
+            c, "S", [str(i) for i in range(1, 151)], source_vars=["T_QPM1_1", "Q32"],
+            match_var="SbjNum", survey_index=idx, chunk=100,
+        )
+        assert res.requests == 4          # 2 chunks, twice (filtered then full)
+
     def test_no_source_vars_skips_filter(self):
         c = FakeClient(full_subjects())
         res = pull(c, "S", ["1", "2"], source_vars=[], match_var="SbjNum")
