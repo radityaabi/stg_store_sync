@@ -65,6 +65,7 @@ class JobDetail(QWidget):
         self._history_ids: list[int] = []
         self._progress_lines: list[str] = []
         self._add_line_ix: int | None = None
+        self._add_line_stage: str | None = None
         self._survey_index: dict = {}
         self._paired_survey_id: str = ""
         self._build_ui()
@@ -479,20 +480,20 @@ class JobDetail(QWidget):
         if stage == "start":
             self._progress_lines = []
             self._add_line_ix = None
+            self._add_line_stage = None
             self.progress_text.setPlainText("")
             job = event.get("job", "")
             dry = " (dry run)" if event.get("dry_run") else ""
             self.progress_label.setText(f"run: {job}{dry}")
         line = _progress_line(event)
         if line:
-            if stage == "add":
-                if self._add_line_ix is not None:
-                    self._progress_lines[self._add_line_ix] = line
-                else:
-                    self._progress_lines.append(line)
-                    self._add_line_ix = len(self._progress_lines) - 1
+            inplace = stage in ("add", "pull_chunk")
+            if inplace and self._add_line_stage == stage and self._add_line_ix is not None:
+                self._progress_lines[self._add_line_ix] = line
             else:
                 self._progress_lines.append(line)
+                self._add_line_ix = len(self._progress_lines) - 1 if inplace else None
+                self._add_line_stage = stage if inplace else None
             self.progress_text.setPlainText("\n".join(self._progress_lines))
             # Keep the newest stage visible (setPlainText resets the cursor).
             self.progress_text.moveCursor(QTextCursor.End)
@@ -501,6 +502,7 @@ class JobDetail(QWidget):
     def clear_run_progress(self) -> None:
         self._progress_lines = []
         self._add_line_ix = None
+        self._add_line_stage = None
         self.progress_text.setPlainText("")
         self.progress_panel.hide()
 
@@ -575,6 +577,7 @@ class JobDetail(QWidget):
 _STAGE_TEXT = {
     "ids": "listing interviews",
     "pull": "pulling interview data",
+    "pull_chunk": "pulling interview data",
     "store": "reading store",
     "preflight": "checking readiness",
     "plan": "planning changes",
@@ -593,6 +596,8 @@ def _progress_line(event: dict) -> str:
         return f"· {label}: {event.get('total', 0)} interview(s)"
     if stage == "pull":
         return f"· {label}: {event.get('total', 0)} record(s)"
+    if stage == "pull_chunk":
+        return f"· {label}: {event.get('done', 0)}/{event.get('total', 0)}"
     if stage == "store":
         return f"· {label}: {event.get('total', 0)} row(s)"
     if stage == "plan":

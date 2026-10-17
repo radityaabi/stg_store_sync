@@ -147,6 +147,10 @@ def suggest_aliases(
     source_vars = sorted({k for rec in source_records for k in rec})
 
     by_var = {v: _values(source_records, v) for v in source_vars}
+    # Sets are precomputed once per var: rebuilding `set(src_vals)` inside the
+    # (store_col × source_var) loop dominated a wide survey (60 × 429 = 25 740
+    # rebuilds of ~1.5k values each, ~6 s at 1569 rows).
+    by_var_set = {v: set(vals) for v, vals in by_var.items()}
     by_var_norm = {v: {_normalize(x) for x in vals} for v, vals in by_var.items()}
 
     result: dict[str, list[ColumnSuggestion]] = {}
@@ -158,7 +162,7 @@ def suggest_aliases(
 
         for var in source_vars:
             src_vals = by_var[var]
-            exact = len(store_set & set(src_vals))
+            exact = len(store_set & by_var_set[var])
             norm = len(store_norm & by_var_norm[var])
             if exact:
                 status, overlap = "ok", exact

@@ -158,6 +158,21 @@ class TestSuggestAliases:
         assert len(suggest_aliases(store, src, top=1)["X"]) == 1
         assert len(suggest_aliases(store, src, top=5)["X"]) == 2
 
+    def test_wide_survey_set_reuse_is_bounded(self):
+        # Regression guard for the 2026-10-17 scale fix: source value sets must
+        # be built once per var, not once per (store_col × source_var) pair.
+        # 12 cols × 40 vars × 60 rows is ~29k comparisons; rebuilding 480 sets
+        # of 60 values each is what made a 1569-row run spend 5 s here.
+        import time
+        n, ncols, nvars = 60, 12, 40
+        store = [{f"c{j}": f"0{i}-{j}" for j in range(ncols)} | {"No": str(i)} for i in range(n)]
+        src = [{f"v{j}": f"{i}-{j}" for j in range(nvars)} for i in range(n)]
+        start = time.perf_counter()
+        sugg = suggest_aliases(store, src, exclude={"No"}, top=3)
+        elapsed = time.perf_counter() - start
+        assert set(sugg) == {f"c{j}" for j in range(ncols)}
+        assert elapsed < 2.0, f"suggest_aliases too slow: {elapsed:.2f}s"
+
 
 # --- strict -----------------------------------------------------------------
 

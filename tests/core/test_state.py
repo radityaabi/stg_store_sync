@@ -297,3 +297,58 @@ def test_connection_busy_timeout_allows_concurrent_writers(tmp_path):
         assert busy_ms >= 30_000
     finally:
         st.close()
+
+
+def _traced_commits(st):
+    """Collect the SQL statements SQLite actually commits."""
+    seen: list[str] = []
+    st.conn.set_trace_callback(lambda sql: seen.append(sql) if sql.strip().upper() == "COMMIT" else None)
+    return seen
+
+
+class TestTransaction:
+    def test_bulk_writes_commit_once(self, tmp_path):
+        # The run path tracks/adds thousands of rows; one fsync per row made
+        # that ~6 s. Inside `transaction()` the whole batch is one commit.
+        st = State(tmp_path / "s.db")
+        try:
+            commits = _traced_commits(st)
+            with st.transaction():
+                for i in range(50):
+                    st.track_row(job="j", match_value=str(i), row_hash="h")
+            assert len(commits) == 1
+            assert st.tracked_keys("j") == {str(i) for i in range(50)}
+        finally:
+            st.close()
+
+    def test_transaction_rolls_back_on_error(self, tmp_path):
+        st = State(tmp_path / "s.db")
+        try:
+            with pytest.raises(RuntimeError):
+                with st.transaction():
+                    st.track_row(job="j", match_value="keep", row_hash="h")
+                    raise RuntimeError("boom")
+            assert st.tracked_keys("j") == set()
+        finally:
+            st.close()
+
+    def test_transaction_is_reentrant(self, tmp_path):
+        st = State(tmp_path / "s.db")
+        try:
+            commits = _traced_commits(st)
+            with st.transaction():
+                st.track_row(job="j", match_value="a", row_hash="h")
+                with st.transaction():
+                    st.track_row(job="j", match_value="b", row_hash="h")
+            assert len(commits) == 1
+            assert st.tracked_keys("j") == {"a", "b"}
+        finally:
+            st.close()
+
+    def test_write_outside_transaction_still_commits(self, tmp_path):
+        st = State(tmp_path / "s.db")
+        try:
+            st.track_row(job="j", match_value="a", row_hash="h")
+            assert st.tracked_keys("j") == {"a"}
+        finally:
+            st.close()

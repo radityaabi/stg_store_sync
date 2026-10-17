@@ -230,6 +230,28 @@ def test_add_progress_line_format():
     d.set_run_progress({"stage": "add", "done": 5, "total": 296})
     assert "5/296" in d.progress_text.toPlainText()
 
+def test_pull_chunk_progress_updates_in_place():
+    # A long pull must show live n/total rather than one line per chunk.
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "start", "job": "j", "dry_run": True})
+    for done in (100, 200, 300):
+        d.set_run_progress({"stage": "pull_chunk", "done": done, "total": 300})
+    lines = [ln for ln in d.progress_text.toPlainText().splitlines() if ln.strip()]
+    assert len(lines) == 2  # "started" + one in-place pull line
+    assert "300/300" in lines[-1]
+
+def test_chunk_line_does_not_swallow_the_add_line():
+    # After the pull finishes, the write progress gets its own line.
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "start", "job": "j", "dry_run": False})
+    d.set_run_progress({"stage": "pull_chunk", "done": 3, "total": 3})
+    d.set_run_progress({"stage": "pull", "total": 3})
+    d.set_run_progress({"stage": "add", "done": 1, "total": 2})
+    text = d.progress_text.toPlainText()
+    assert "3/3" in text and "1/2" in text
+
 def test_reload_clears_stale_pull_terms():
     d = JobDetail()
     d.load(E(), a_job())

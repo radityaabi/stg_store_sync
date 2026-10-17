@@ -139,6 +139,33 @@ class TestTable:
 
 
 class TestChecks:
+    def test_suggestions_false_still_reports_errors(self):
+        # The in-run gate only reads `errors`; skipping the alias ranking must
+        # not weaken any safety check.
+        rep = preflight(
+            store_rows=store_rows(),
+            source_records=source_records(),
+            config=make_config(id_column="not_there"),
+            suggestions=False,
+        )
+        assert rep.ok is False
+        # The cheap rows still exist; only the alias ranking is skipped.
+        assert all(r.suggestion is None for r in rep.table)
+        assert any("id" in e.lower() for e in rep.errors)
+
+    def test_suggestions_false_ok_for_valid_config(self):
+        full = preflight(
+            store_rows=store_rows(), source_records=source_records(), config=make_config()
+        )
+        cheap = preflight(
+            store_rows=store_rows(),
+            source_records=source_records(),
+            config=make_config(),
+            suggestions=False,
+        )
+        assert cheap.ok is True
+        assert cheap.errors == full.errors
+
     def test_id_column_ok(self):
         rep = preflight(
             store_rows=store_rows(), source_records=source_records(), config=make_config()

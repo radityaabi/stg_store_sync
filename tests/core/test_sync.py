@@ -70,6 +70,9 @@ class FakeClient:
 
     def simple_export(self, survey_id, ids, *, variable_names=None, **kw):
         self.calls.append(("export", variable_names))
+        on_chunk = kw.get("on_chunk")
+        if on_chunk is not None:
+            on_chunk(len(ids), len(ids))
         return [s for s in self.subjects if s["SubjectID"] in ids]
 
     def get_store(self, store_id):
@@ -247,7 +250,7 @@ class TestProgress:
         run_sync(config(dry_run=True), client=c, state=st, progress=events.append)
         stages = [e["stage"] for e in events]
         assert stages == [
-            "start", "ids", "pull", "store",
+            "start", "ids", "pull_chunk", "pull", "store",
             "preflight", "plan", "apply", "applied", "proposals", "done",
         ]
 
@@ -260,7 +263,7 @@ class TestProgress:
         )
         stages = [e["stage"] for e in events]
         assert stages == [
-            "start", "ids", "pull", "store",
+            "start", "ids", "pull_chunk", "pull", "store",
             "preflight", "plan", "apply", "add", "applied", "proposals", "done",
         ]
 

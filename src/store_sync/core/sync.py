@@ -46,6 +46,10 @@ def _readiness_errors(config, store_rows, source_records) -> list[str]:
         store_rows=store_rows,
         source_records=source_records,
         config=config,
+        # Only `errors` is read here, so skip the alias-ranking pass. It is the
+        # costliest step of preflight and its output (the review table) is
+        # discarded on the run path.
+        suggestions=False,
     )
     m = config.binding.match
     source_dup = (
@@ -209,6 +213,7 @@ def _run_sync_inner(
                 match_var=match.source_var if match else None,
                 survey_index=index,
                 should_stop=should_stop,
+                on_chunk=lambda done, total: _emit("pull_chunk", done=done, total=total),
             )
         except Cancelled:
             _finish("cancelled", {})
@@ -256,15 +261,17 @@ def _run_sync_inner(
         _emit("plan", counts=dict(p.counts), suppressed=len(p.suppressed))
 
         # record conflicts/quarantine (always, dry-run included)
-        for action in p.actions:
-            if action.kind == "conflict":
-                state.record_conflict(run_id, match_value=action.match_value, reason=action.reason)
-        for rec in p.quarantined:
-            state.record_conflict(
-                run_id,
-                match_value=rec.get(match.source_var) if match else None,
-                reason="missing match key in source",
-            )
+        if p.actions or p.quarantined:
+            with state.transaction():
+                for action in p.actions:
+                    if action.kind == "conflict":
+                        state.record_conflict(run_id, match_value=action.match_value, reason=action.reason)
+                for rec in p.quarantined:
+                    state.record_conflict(
+                        run_id,
+                        match_value=rec.get(match.source_var) if match else None,
+                        reason="missing match key in source",
+                    )
 
         # 4) fail-closed readiness gate (before any write) -------------------
         if readiness_errs:
@@ -336,27 +343,29 @@ def _run_sync_inner(
         # 5b) record update proposals (pending operator approval) ------------
         proposals = 0
         if not dry_run:
-            for action in p.actions:
-                if action.kind == "update":
-                    state.record_proposal(
-                        run_id,
-                        job=config.job,
-                        match_value=action.match_value,
-                        id_value=action.id_value,
-                        payload=action.payload,
-                        diff=action.diffs,
-                    )
-                    proposals += 1
+            with state.transaction():
+                for action in p.actions:
+                    if action.kind == "update":
+                        state.record_proposal(
+                            run_id,
+                            job=config.job,
+                            match_value=action.match_value,
+                            id_value=action.id_value,
+                            payload=action.payload,
+                            diff=action.diffs,
+                        )
+                        proposals += 1
         _emit("proposals", count=proposals)
 
         # 6) tracking (only real writes; adds) -------------------------------
-        if not dry_run:
-            for action in wres.applied:
-                state.track_row(
-                    job=config.job,
-                    match_value=action.match_value,
-                    row_hash=state.row_hash(action.payload),
-                )
+        if not dry_run and wres.applied:
+            with state.transaction():
+                for action in wres.applied:
+                    state.track_row(
+                        job=config.job,
+                        match_value=action.match_value,
+                        row_hash=state.row_hash(action.payload),
+                    )
 
         # A cooperative stop mid-apply: writes already applied stay tracked,
         # and the run is finished exactly once as `cancelled`.

@@ -179,6 +179,28 @@ class TestSurveyInterviewIDs:
 
 
 class TestSimpleExport:
+    def test_chunk_size_defaults_to_100(self, client_and_session):
+        c, _ = client_and_session
+        assert c.export_chunk == 100
+
+    def test_chunk_size_reads_env_override(self, monkeypatch):
+        monkeypatch.setenv("STG_EXPORT_CHUNK", "500")
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]))
+        assert c.export_chunk == 500
+
+    def test_explicit_chunk_beats_env_override(self, monkeypatch):
+        monkeypatch.setenv("STG_EXPORT_CHUNK", "500")
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]), export_chunk=42)
+        assert c.export_chunk == 42
+
+    def test_malformed_env_chunk_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("STG_EXPORT_CHUNK", "many")
+        c = STGClient(server="https://stg.example.com", user="u", password="p",
+                      session=FakeSession([]))
+        assert c.export_chunk == 100
+
     def test_single_chunk_returns_subjects(self, client_and_session):
         c, s = client_and_session
         s._responses = [
@@ -227,6 +249,22 @@ class TestSimpleExport:
             c.simple_export("S", ["1", "2"], chunk=1, should_stop=stop)
         # only the first chunk's request went out
         assert len(s.calls) == 1
+
+    def test_on_chunk_reports_progress_per_chunk(self, client_and_session):
+        c, s = client_and_session
+        s._responses = [
+            FakeResponse(200, [{"SubjectID": "1", "Columns": []}]),
+            FakeResponse(200, [{"SubjectID": "2", "Columns": []}]),
+            FakeResponse(200, [{"SubjectID": "3", "Columns": []}]),
+        ]
+        seen = []
+        c.simple_export("S", ["1", "2", "3"], chunk=1, on_chunk=lambda d, t: seen.append((d, t)))
+        assert seen == [(1, 3), (2, 3), (3, 3)]
+
+    def test_on_chunk_optional(self, client_and_session):
+        c, s = client_and_session
+        s._responses = [FakeResponse(200, [])]
+        assert c.simple_export("S", ["1"]) == []
 
 
 class TestRetry:

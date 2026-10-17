@@ -9,6 +9,7 @@ returns parsed JSON. Retries apply to GETs that STG is known to drop mid-stream
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Callable, Iterable, Sequence
 
@@ -27,6 +28,13 @@ _RETRYABLE = (ChunkedEncodingError, ProtocolError, ReqConnectionError)
 
 DEFAULT_TIMEOUT = 120
 EXPORT_TIMEOUT = 300
+# 100 comes from the proven pull script (`tasks/plan.md`): STG drops long
+# chunked bodies mid-transfer, so bigger chunks are riskier per request. It is a
+# *round-trip* trade-off, though — one request per 100 ids means 16 sequential
+# POSTs for a 1569-interview survey — so an operator can raise it per install
+# without touching code.
+DEFAULT_EXPORT_CHUNK = 100
+EXPORT_CHUNK_ENV = "STG_EXPORT_CHUNK"
 
 
 class STGError(RuntimeError):
@@ -48,7 +56,7 @@ class STGClient:
         timeout: int = DEFAULT_TIMEOUT,
         max_retries: int = 3,
         backoff: float = 5.0,
-        export_chunk: int = 100,
+        export_chunk: int | None = None,
     ):
         if not server:
             raise ValueError("server is required")
@@ -58,10 +66,24 @@ class STGClient:
         self.timeout = timeout
         self.max_retries = max(1, int(max_retries))
         self.backoff = backoff
-        self.export_chunk = max(1, int(export_chunk))
+        self.export_chunk = max(1, int(self._chunk_setting(export_chunk)))
         self.headers = {"Accept": "application/json"}
 
     # -- transport ---------------------------------------------------------
+
+    @staticmethod
+    def _chunk_setting(explicit: int | None) -> int:
+        """Export chunk size: explicit arg → `STG_EXPORT_CHUNK` → 100.
+
+        A malformed env value is ignored rather than fatal (a typo must not
+        break every run); an explicit arg always wins.
+        """
+        if explicit is not None:
+            return explicit
+        raw = os.environ.get(EXPORT_CHUNK_ENV, "").strip()
+        if raw.isdigit() and int(raw) > 0:
+            return int(raw)
+        return DEFAULT_EXPORT_CHUNK
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
@@ -187,12 +209,16 @@ class STGClient:
         include_nulls: bool | None = None,
         chunk: int | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_chunk: Callable[[int, int], None] | None = None,
     ) -> list[dict]:
         """Pull subjects via /SimpleExport, chunked and retried per chunk.
 
         Returns the flat list of subject objects (`{SubjectID, Columns:[...]}`).
         When `should_stop()` returns true, raise `Cancelled` before the next
         chunk (cooperative mid-pull cancellation).
+
+        `on_chunk(done_ids, total_ids)` is called after each chunk lands, so a
+        multi-minute pull can report live progress instead of looking hung.
         """
         ids = [str(s) for s in subject_ids]
         if not ids:
@@ -212,6 +238,8 @@ class STGClient:
                 params["includeNulls"] = str(include_nulls).lower()
             data = self._get("/SimpleExport", params, timeout=EXPORT_TIMEOUT, retry=True)
             out.extend(self._as_subjects(data))
+            if on_chunk is not None:
+                on_chunk(min(i + size, len(ids)), len(ids))
         return out
 
     # -- writes ------------------------------------------------------------

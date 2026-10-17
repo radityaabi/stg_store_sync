@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 _SCHEMA = """
@@ -86,11 +87,44 @@ class State:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, check_same_thread=False, timeout=30.0)
         self.conn.row_factory = sqlite3.Row
+        self._tx_depth = 0
         self.conn.executescript(_SCHEMA)
-        self.conn.commit()
+        self._commit()
 
     def close(self) -> None:
         self.conn.close()
+
+    # -- transactions ------------------------------------------------------
+
+    def _commit(self) -> None:
+        """Commit unless a `transaction()` block owns the commit.
+
+        Every write helper commits on its own, which is right for one isolated
+        write but means **one fsync per row** in a bulk loop: tracking 1569 rows
+        took ~6 s on ext4, ~0.01 s inside one transaction. Loops on the run path
+        wrap themselves in `transaction()` so the commit happens once.
+        """
+        if self._tx_depth == 0:
+            self.conn.commit()
+
+    @contextmanager
+    def transaction(self):
+        """Group many writes into a single commit (re-entrant).
+
+        Durability is unchanged — this is one synchronous transaction instead of
+        N — so a crash rolls back the whole batch rather than part of it.
+        """
+        self._tx_depth += 1
+        try:
+            yield self.conn
+        except Exception:
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                self.conn.rollback()
+            raise
+        self._tx_depth -= 1
+        if self._tx_depth == 0:
+            self.conn.commit()
 
     # -- runs --------------------------------------------------------------
 
@@ -98,7 +132,7 @@ class State:
         cur = self.conn.execute(
             "INSERT INTO runs (job, dry_run) VALUES (?, ?)", (job, int(bool(dry_run)))
         )
-        self.conn.commit()
+        self._commit()
         return cur.lastrowid
 
     def finish_run(self, run_id: int, *, status: str, counts: dict) -> None:
@@ -106,7 +140,7 @@ class State:
             "UPDATE runs SET status = ?, counts = ?, finished_at = datetime('now') WHERE id = ?",
             (status, json.dumps(counts, sort_keys=True), run_id),
         )
-        self.conn.commit()
+        self._commit()
 
     @staticmethod
     def _run_row(row: sqlite3.Row) -> dict:
@@ -132,7 +166,7 @@ class State:
             "counts = COALESCE(counts, '{}'), finished_at = datetime('now') "
             "WHERE status IS NULL"
         )
-        self.conn.commit()
+        self._commit()
         return cur.rowcount
 
     def recent_runs(self, job: str, *, limit: int = 20) -> list[dict]:
@@ -148,7 +182,7 @@ class State:
             "INSERT INTO conflicts (run_id, match_value, reason) VALUES (?, ?, ?)",
             (run_id, "" if match_value is None else str(match_value), reason),
         )
-        self.conn.commit()
+        self._commit()
 
     def conflicts_for_run(self, run_id: int) -> list[dict]:
         rows = self.conn.execute(
@@ -171,14 +205,14 @@ class State:
             "row_hash = excluded.row_hash, updated_at = excluded.updated_at",
             (job, str(match_value), row_hash),
         )
-        self.conn.commit()
+        self._commit()
 
     def untrack_row(self, *, job: str, match_value) -> None:
         self.conn.execute(
             "DELETE FROM tracked WHERE job = ? AND match_value = ?",
             (job, str(match_value)),
         )
-        self.conn.commit()
+        self._commit()
 
     def tracked_keys(self, job: str) -> set[str]:
         rows = self.conn.execute(
@@ -237,7 +271,7 @@ class State:
                 json.dumps(diff, ensure_ascii=False, default=str),
             ),
         )
-        self.conn.commit()
+        self._commit()
         return cur.lastrowid
 
     def pending_proposals(self, job: str) -> list[dict]:
@@ -258,7 +292,7 @@ class State:
             "UPDATE proposals SET status = ?, decided_at = datetime('now') WHERE id = ?",
             (status, proposal_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_proposal(self, proposal_id: int) -> dict | None:
         row = self.conn.execute(
@@ -279,7 +313,7 @@ class State:
             "              THEN 'manual' ELSE excluded.reason END",
             (job, str(match_value), reason),
         )
-        self.conn.commit()
+        self._commit()
 
     def unblacklist_key(
         self, job: str, match_value, *, forget_tracking: bool = True
@@ -302,7 +336,7 @@ class State:
                 "DELETE FROM tracked WHERE job = ? AND match_value = ?",
                 (job, str(match_value)),
             )
-        self.conn.commit()
+        self._commit()
 
     def blacklisted_keys(self, job: str) -> set[str]:
         rows = self.conn.execute(
@@ -363,7 +397,7 @@ class State:
             "ON CONFLICT(job, minute_key) DO NOTHING",
             (job, minute_key),
         )
-        self.conn.commit()
+        self._commit()
         return cur.rowcount == 1
 
     def prune_os_fired(self, keep_after: str) -> int:
@@ -371,7 +405,7 @@ class State:
         cur = self.conn.execute(
             "DELETE FROM os_fired WHERE minute_key < ?", (keep_after,)
         )
-        self.conn.commit()
+        self._commit()
         return cur.rowcount
 
     # -- notifications -----------------------------------------------------
@@ -398,7 +432,7 @@ class State:
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (run_id, job, status, recipients, subject, body_html, reason),
         )
-        self.conn.commit()
+        self._commit()
         return cur.lastrowid
 
     def notification_for_run(self, run_id: int) -> dict | None:

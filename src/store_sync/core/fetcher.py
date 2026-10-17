@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable
 
 from store_sync.core.binding import project
 from store_sync.core.config import ColumnBinding
@@ -185,6 +185,7 @@ def pull(
     match_var: str | None = None,
     survey_index: dict[str, str] | None = None,
     columns: list[ColumnBinding] | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
     **export_kwargs,
 ) -> PullResult:
     """Pull, flatten, optionally project. See module docstring for the steps."""
@@ -205,6 +206,7 @@ def pull(
         survey_id,
         subject_ids,
         variable_names=(terms if use_filter else None),
+        on_chunk=on_chunk,
         **export_kwargs,
     )
     records = [flatten_subject(s) for s in subjects]

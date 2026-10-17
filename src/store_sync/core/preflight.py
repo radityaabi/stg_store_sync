@@ -84,7 +84,15 @@ def preflight(
     store_rows: list[dict],
     source_records: list[dict],
     config: JobConfig,
+    suggestions: bool = True,
 ) -> PreflightReport:
+    """Build the preflight report.
+
+    `suggestions=False` skips the alias-ranking pass (the expensive part: every
+    store column against every source variable). The in-run readiness gate only
+    needs `errors`, and it reuses the full snapshots, so paying for a review
+    table nothing reads was the single largest cost of a 1569-row run.
+    """
     rep = PreflightReport()
 
     if not store_rows:
@@ -102,7 +110,7 @@ def preflight(
 
     cols_for_suggest = [c.store_col for c in configured]
     suggestions_by_col: dict[str, ColumnSuggestion] = {}
-    if store_rows and source_records:
+    if suggestions and store_rows and source_records:
         sugg = suggest_aliases(
             store_rows,
             source_records,
