@@ -1295,8 +1295,8 @@ def test_two_finished_runs_produce_two_toasts(tmp_path):
 
     w = MainWindow()
     c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
-    c.save("a", a_job(), schedule=Schedule(""), enabled=False)
-    c.save("b", a_job(), schedule=Schedule(""), enabled=False)
+    c.save("a", a_job("a"), schedule=Schedule(""), enabled=False)
+    c.save("b", a_job("b"), schedule=Schedule(""), enabled=False)
     _seed_run(c, job="a")
     _seed_run(c, job="b")
     w.show()
@@ -1329,4 +1329,19 @@ def test_detail_stop_only_stops_that_job(tmp_path):
     w.show_job("b")
     w.job_detail.stop_requested.emit()
     assert seen == ["b"]                 # scoped, not global
+    c.stop(); w.close()
+
+
+def test_finish_status_does_not_hide_a_live_run(tmp_path):
+    """A finished run's status must not erase a still-running job's indicator."""
+    from store_sync.core.run_queue import QueueState
+
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.save("a", a_job("a"), schedule=Schedule(""), enabled=False)
+    c.save("b", a_job("b"), schedule=Schedule(""), enabled=False)
+    _seed_run(c, job="a")
+    c._active_prev = {"a", "b"}
+    c._on_queue_changed(QueueState(active=["b"], pending=[]))
+    assert "running b" in w.status_label.text()
     c.stop(); w.close()

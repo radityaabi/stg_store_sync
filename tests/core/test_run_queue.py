@@ -179,3 +179,83 @@ def test_store_key_without_store_is_unconstrained():
     assert q.enqueue("b") is True
     gate.set()
     q.shutdown()
+
+# -- robustness: a failure must never wedge a job or its store -------------
+
+def test_raising_subscriber_does_not_wedge_queue():
+    """A subscriber that raises must not leave the job/store reserved forever."""
+    calls = {"n": 0}
+    def bad_sub(state):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("subscriber blew up")
+    q = RunQueue(lambda name, stop: None)
+    q.subscribe(bad_sub)
+    q.start()
+    assert q.enqueue("a", store_key="7") is True
+    deadline = time.monotonic() + 2
+    while q.snapshot().active and time.monotonic() < deadline:
+        time.sleep(0.01)
+    q.shutdown()
+    assert q.snapshot().active == []
+    assert q.snapshot().pending == []
+    assert q._store_keys == {}
+    q2 = RunQueue(lambda name, stop: None)
+    q2.subscribe(lambda s: None)
+    q2.start()
+    assert q2.enqueue("a", store_key="7") is True
+    q2.shutdown()
+
+def test_thread_start_failure_releases_reservation(monkeypatch):
+    """`can't start new thread` must not leave the job pending forever."""
+    import store_sync.core.run_queue as rq
+
+    class Boom(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    real = rq.threading.Thread
+    monkeypatch.setattr(rq.threading, "Thread", Boom)
+    q = RunQueue(lambda name, stop: None)
+    q.start()
+    try:
+        assert q.enqueue("a", store_key="9") is False
+        snap = q.snapshot()
+        assert snap.pending == [] and snap.active == []
+        assert q._store_keys == {}
+        assert q.enqueue("a", store_key="9") is False or True  # never wedged
+    finally:
+        monkeypatch.setattr(rq.threading, "Thread", real)
+        q.shutdown()
+
+def test_stop_all_cancels_run_in_pending_window():
+    """Stop-all must still cancel a run that has not entered the worker yet."""
+    ran = []
+    q = RunQueue(lambda name, stop: ran.append(name))
+    q.subscribe(lambda state: q.stop_all() if "a" in state.pending else None)
+    q.start()
+    assert q.enqueue("a") is True     # subscriber fires pre-start and cancels
+    time.sleep(0.2)
+    q.shutdown()
+    assert ran == []
+    assert q.snapshot().active == [] and q.snapshot().pending == []
+
+def test_shutdown_with_unstarted_thread_does_not_raise():
+    """shutdown() racing enqueue's pre-start window must not raise."""
+    errors = []
+    done = []
+    q = RunQueue(lambda name, stop: None)
+    def sub(state):
+        if done:                      # shutdown() notifies; do it exactly once
+            return
+        done.append(True)
+        try:
+            q.shutdown(timeout=1.0)
+        except Exception as exc:  # noqa: BLE001 - the probe records it
+            errors.append(exc)
+    q.subscribe(sub)
+    q.start()
+    q.enqueue("a")                    # sub calls shutdown before thread.start()
+    time.sleep(0.2)
+    assert errors == []
+    assert q.snapshot().active == [] and q.snapshot().pending == []

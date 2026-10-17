@@ -1,11 +1,11 @@
 """PySide6 entry point: launch the STG Store Sync window.
 
 Wires the stacked window (Dashboard / JobDetail / RunDetail) to the persisted
-registry, the single-worker run queue, and the interval scheduler:
+registry, the per-run run queue, and the interval scheduler:
 
 * **Registry** (`core/registry.py`) — the job configs, same SQLite file as `State`.
-* **RunQueue** (`core/run_queue.py`) — one worker thread, runs jobs one at a time
-  with cooperative stop.
+* **RunQueue** (`core/run_queue.py`) — one thread per accepted run: concurrent
+  across jobs, one run per job, never two runs against one store.
 * **Scheduler** (`core/scheduler.py`) + **SchedulerThread** — enqueues due jobs.
 
 The default `run_fn` builds an `STGClient` from `.env` (STG_SERVER/STG_USER/
@@ -478,7 +478,7 @@ class Controller:
         w = self.window
         w.new_requested.connect(self._new)
         w.run_requested.connect(self.run_now)
-        w.stop_requested.connect(self.queue.stop_current)          # dashboard: all
+        w.stop_requested.connect(lambda: self.queue.stop_current())  # dashboard: all
         w.stop_job_requested.connect(lambda name: self.queue.stop_current(name))
         w.edit_requested.connect(self._open_job)
         w.delete_requested.connect(self._confirm_delete)
@@ -544,12 +544,6 @@ class Controller:
     def _on_queue_changed(self, state) -> None:
         self.window.dashboard.set_queue(state.active, state.pending)
         now_active = set(state.active)
-        if now_active:
-            self.window.set_status(
-                "running " + ", ".join(sorted(now_active)), _STATUS_WARN
-            )
-        else:
-            self.window.set_status("ready", _STATUS_OK)
         # Runs that just finished (this callback may report more than one) →
         # one toast each, plus a History refresh for the open job.
         for finished in sorted(self._active_prev - now_active):
@@ -579,6 +573,14 @@ class Controller:
         if self._detail_name and self._detail_name in (self._active_prev - now_active):
             self._load_history(self._detail_name)
         self._active_prev = now_active
+        # The header mirrors live work last, so a finish never hides a run that
+        # is still going (the operator's only cross-page indicator).
+        if now_active:
+            self.window.set_status(
+                "running " + ", ".join(sorted(now_active)), _STATUS_WARN
+            )
+        else:
+            self.window.set_status("ready", _STATUS_OK)
         self._refresh()
 
     def _on_due(self, name: str) -> None:
