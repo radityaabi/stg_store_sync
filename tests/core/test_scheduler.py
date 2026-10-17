@@ -82,7 +82,7 @@ def test_tick_fires_once_per_minute():
     fired = []
     s = Scheduler(
         FakeRegistry([E("a", True, Schedule("minute", 1))]),
-        fired.append,
+        lambda name, **kw: fired.append(name),
         now_fn=lambda: datetime(2026, 10, 8, 3, 10, 5),
     )
     assert s.tick() == ["a"]
@@ -94,7 +94,7 @@ def test_tick_fires_once_per_minute():
 def test_disabled_not_fired():
     s = Scheduler(
         FakeRegistry([E("a", False, Schedule("minute", 1))]),
-        lambda n: None,
+        lambda name, **kw: None,
         now_fn=lambda: datetime(2026, 10, 8, 3, 10),
     )
     assert s.tick() == []
@@ -111,7 +111,33 @@ def test_bad_entry_is_skipped_not_fatal():
 
     s = Scheduler(
         FakeRegistry([Bad(), E("a", True, Schedule("minute", 1))]),
-        lambda n: None,
+        lambda name, **kw: None,
         now_fn=lambda: datetime(2026, 10, 8, 3, 10),
     )
     assert s.tick() == ["a"]
+
+class EStore:
+    def __init__(self, name, enabled, schedule, store_id):
+        self.name, self.enabled, self.schedule = name, enabled, schedule
+        self.store_id = store_id
+
+def test_tick_passes_store_key():
+    calls = []
+    s = Scheduler(
+        FakeRegistry([EStore("a", True, Schedule("minute", 1), 17620)]),
+        lambda name, **kw: calls.append((name, kw)) or True,
+        now_fn=lambda: datetime(2026, 10, 8, 3, 10),
+    )
+    assert s.tick() == ["a"]
+    assert calls == [("a", {"store_key": "17620"})]
+
+def test_refused_enqueue_still_fires_once_per_minute():
+    calls = []
+    s = Scheduler(
+        FakeRegistry([EStore("a", True, Schedule("minute", 1), 7)]),
+        lambda name, **kw: calls.append(name) or False,   # refused: store busy
+        now_fn=lambda: datetime(2026, 10, 8, 3, 10),
+    )
+    assert s.tick() == ["a"]        # reported fired
+    assert s.tick() == []           # not retried the same minute
+    assert calls == ["a"]           # refused enqueue is not an error

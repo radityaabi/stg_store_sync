@@ -395,7 +395,9 @@ def _cmd_run_due(db: Path, args) -> int:
         names = [args.job] if args.job else None
         collected: list[str] = []
         scheduler = Scheduler(
-            _FilteredRegistry(reg, names), collected.append, now_fn=_now
+            _FilteredRegistry(reg, names),
+            lambda name, **kw: collected.append(name),
+            now_fn=_now,
         )
         scheduler.tick()
 

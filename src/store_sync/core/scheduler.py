@@ -2,8 +2,9 @@
 
 A structured :class:`store_sync.core.config.Schedule` evaluator (interval +
 anchor, spec §4.2) plus a thin loop that, once per tick, enqueues every enabled
-job whose schedule is due and that has not already fired this minute. The
-Scheduler owns no thread: :meth:`Scheduler.tick` is a pure step (testable with
+job whose schedule is due and that has not already fired this minute. Each
+enqueue travels with the job's store key so a store an in-flight run already
+holds is refused (one run per store). The Scheduler owns no thread: :meth:`Scheduler.tick` is a pure step (testable with
 a fake clock) and :meth:`Scheduler.run_forever` is the blocking driver the app
 runs on its own daemon thread.
 
@@ -104,7 +105,13 @@ class Scheduler:
         self._last: dict[str, str] = {}
 
     def tick(self) -> list[str]:
-        """Enqueue every enabled, due job not yet fired this minute."""
+        """Enqueue every enabled, due job not yet fired this minute.
+
+        Each enqueue carries the job's store key, so a store another in-flight
+        run already holds is refused (the queue's same-store guard). A refused
+        enqueue is not an error: the minute is still marked fired, the job is
+        simply skipped until its next due minute.
+        """
         now = self._now()
         minute_key = now.strftime("%Y-%m-%dT%H:%M")
         fired: list[str] = []
@@ -122,7 +129,7 @@ class Scheduler:
             if not due:
                 continue
             self._last[name] = minute_key
-            self._enqueue(name)
+            self._enqueue(name, store_key=str(getattr(entry, "store_id", "") or ""))
             fired.append(name)
         return fired
 
