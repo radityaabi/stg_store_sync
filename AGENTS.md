@@ -14,7 +14,7 @@ default.**
 Standalone repo — **never import from `stg_automation_suite`** (or any sibling
 repo). Reference only.
 
-Status: core + GUI + CLI implemented; **612 tests green**; not yet enabled for a
+Status: core + GUI + CLI implemented; **634 tests green**; not yet enabled for a
 live write. See `tasks/todo.md` for the phase ledger.
 
 ## Stack & layout

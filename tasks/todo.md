@@ -242,3 +242,39 @@
 - [x] 18.6 Tests — 612 green (4 new state/transaction, 6 preflight/chunk, 2 UI);
   both `pytest -q` and `pytest -q -W error`
 - [x] 18.7 Docs — README "Tuning a large survey", `.env.example`
+
+## Phase 19 — Pull concurrency + honest pull cost ✅ COMPLETE
+> Trigger: on the VDI (different network from the dev box) a live 1572-interview
+> run took **307 s** with `counts={}` — i.e. no writes at all, pure reading.
+> Same job on the dev box: **68.8 s**, of which `pull` was **67.0 s** (16
+> `SimpleExport` requests, ~4.2 s each) and every other stage totalled 1.7 s.
+> Per-round-trip latency, not CPU, is the floor — and the VDI is ~4x the dev
+> box per round-trip.
+
+- [x] 19.1 Probe (read-only) — server refuses >100 subject IDs per request:
+  `200 {"Error": "IncorrectInput", "Description": "Incorrect Input: Too many
+  Subject IDs"}` at 101. Not an empty `Subjects` list, but our shape helpers
+  turned it into one — see 19.4.
+- [x] 19.2 `core/stg_client.py` — parallel chunk pull on a thread pool
+  (`STG_EXPORT_WORKERS`, default 4, clamped 1–8); results reassembled in the
+  caller's id order, retry per chunk, `Cancelled` still honoured before dispatch.
+  Measured: 82.1 s → 26.8 s at 4 workers, 25.8 s at 8, 39.8 s at 12 (saturation).
+- [x] 19.3 `core/stg_client.py` — chunk clamped to the server ceiling
+  (`MAX_EXPORT_CHUNK = 100`) for both the env knob and a per-call override, so no
+  setting can turn a pull into a silent no-op.
+- [x] 19.4 `core/fetcher.py` — `PullResult.fallback_reason` / `seconds` /
+  `requests`; `on_fallback(reason)` callback. A fallback is ~15x the payload
+  (130.9 s vs 8.7 s per 100 ids) and was previously invisible.
+- [x] 19.5 `core/sync.py` — emits `pull_fallback` with the reason, and `pull`
+  carries `fell_back` / `seconds` / `requests`.
+- [x] 19.6 `ui/job_detail.py` — pull line shows `1572 record(s) (16 request(s),
+  67.4s)`; a fallback gets its own timeline line and a warning on the pull line.
+- [x] 19.7 `gui.py` — `_close_client` uses the new `STGClient.close()`, which
+  closes the shared session and every per-thread worker session.
+- [x] 19.8 Tests — **634 green** (22 new: clamp/parallel/order/cancel/fallback
+  reason/timing + 4 UI lines), both `pytest -q` and `pytest -q -W error`.
+- [x] 19.9 Docs — README "Tuning a large survey" rewritten (concurrency is the
+  knob, chunk is a ceiling), `.env.example`, AGENTS.md test count.
+- [ ] 19.10 Open — `_as_subjects`/`_as_list`/`_as_ids` still fold a
+  `{"Error": ...}` body into `[]`. With the clamp in place the known trigger is
+  gone, but the swallow remains for any other STG error shape.

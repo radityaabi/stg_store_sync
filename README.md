@@ -64,26 +64,36 @@ verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not starte
 ### Tuning a large survey
 
 A run is dominated by network round-trips, not local CPU (the planner diffs
-1569 × 1569 rows in ~0.05 s). Two knobs, both optional:
+1569 × 1569 rows in ~0.05 s). On a slow link (a VDI, a remote office) each
+`SimpleExport` round-trip can take 10–20 s, so the pull — one request per 100
+ids — is the whole runtime.
 
-- **Export chunk size** — one `SimpleExport` request per N ids. The default is
-  100 (the proven, conservative value: STG drops long chunked bodies), so a
-  1569-interview pull is 16 sequential requests. Raising it cuts wall-clock
-  roughly linearly:
+- **Export concurrency** — chunks are independent requests, so they are fetched
+  on a small pool. This is the main knob for a slow link:
 
   ```bash
-  STG_EXPORT_CHUNK=500 stg-store-sync-cli run <name>
+  STG_EXPORT_WORKERS=6 stg-store-sync-cli run <name>
   ```
 
-  Raise it gradually and watch for dropped bodies; a chunk that fails is
-  retried, never silently truncated.
+  Default 4, clamped to 1–8. Measured from a dev machine: 82 s → 27 s at 4
+  workers, → 26 s at 8, degrading at 12. Results always come back in interview
+  order, retries stay per chunk, and a chunk that fails still fails loudly.
+- **Export chunk size** — ids per request. **100 is the server's ceiling**, not
+  a preference: `/SimpleExport` answers `IncorrectInput: Too many Subject IDs`
+  for 101+ ids. `STG_EXPORT_CHUNK` is clamped to 100, because an oversized
+  request returns 200 with no `Subjects` and would read as "zero rows" — a
+  silent no-op run.
 - **Write throttle** — `AddRow` is one POST per row and the API has no bulk
   endpoint, so writes cost `rows × (latency + throttle)`. The GUI/CLI default
-  is 0.05 s; for a large first sync this is the whole runtime. Lower it only
-  while STG stays responsive.
+  is 0.05 s; for a large first sync this is the remaining runtime floor. Lower
+  it only while STG stays responsive.
 
 The run log streams live progress (`pulling interview data: 500/1569`,
-`adding rows: 12/1569`) so a long run never looks hung.
+`adding rows: 12/1569`) and the pull line reports its own cost
+(`1572 record(s) (16 request(s), 67.4s)`). If the variable filter is dropped
+and the pull silently becomes a full export — roughly 15× the payload — the
+log says so on its own line: `falling back to a full export: server dropped
+QPM1`.
 
 ## Setup (once Phase 1 lands)
 
