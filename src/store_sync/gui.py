@@ -834,6 +834,7 @@ class Controller:
                 fields["survey_id"],
                 survey_index=fields.get("survey_index", {}),
                 paired_survey_id=fields.get("paired_survey_id", ""),
+                days_back=fields.get("days_back", 0),
             ),
             binding=BindingConfig(
                 match=ColumnBinding(match_source, match_store),

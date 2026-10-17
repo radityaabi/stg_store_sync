@@ -24,6 +24,24 @@ SCHEDULE_UNITS: tuple[str, ...] = ("", "minute", "hour", "day", "week")
 # "HH:MM" 24h, zero-padded — required by day/week schedules.
 _AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
+# Largest fetch window the GUI offers; the API has no documented ceiling, but a
+# window this wide already means "the whole survey" in practice.
+MAX_DAYS_BACK = 90
+
+
+def _int_or_zero(value: Any) -> int:
+    """Coerce a stored/YAML value to int, tolerating blanks and garbage.
+
+    A hand-edited `days_back: "3"` must load; an unparseable value falls back
+    to `0` (full history) rather than raising, so one bad key can never lock an
+    operator out of their own job. Range validation reports it in `validate`.
+    """
+    try:
+        return int(str(value).strip() or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 _WEEKDAY_NAMES = (
     "Monday",
     "Tuesday",
@@ -50,18 +68,30 @@ class StoreConfig:
 
 @dataclass
 class SourceConfig:
+    """Where the interviews come from.
+
+    `days_back` narrows the pull to the last N days of server-arrival time
+    (`dateType=Upload`); `0` — the default — means the survey's full history.
+    It is an optimisation for surveys whose history is too large to export
+    whole, never a correctness knob: rows outside the window are simply not
+    seen by the run (which never deletes).
+    """
+
     survey_id: str
     survey_index: dict[str, str] = field(default_factory=dict)
     paired_survey_id: str = ""
+    days_back: int = 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SourceConfig":
-        # Legacy `window_days`/`date_type` keys are deliberately ignored: the
-        # pull is always the survey's full history.
+        # Legacy `window_days`/`date_type` keys are deliberately ignored: they
+        # belonged to the removed full-window model. `days_back` is the
+        # supported, opt-in fetch window (0 = full history).
         return cls(
             survey_id=str(d.get("survey_id", "")),
             survey_index=dict(d.get("survey_index") or {}),
             paired_survey_id=str(d.get("paired_survey_id", "")),
+            days_back=_int_or_zero(d.get("days_back", 0)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +100,8 @@ class SourceConfig:
             out["survey_index"] = dict(self.survey_index)
         if self.paired_survey_id:
             out["paired_survey_id"] = self.paired_survey_id
+        if self.days_back:
+            out["days_back"] = self.days_back
         return out
 
 
@@ -309,6 +341,11 @@ def validate(cfg: JobConfig) -> list[str]:
         errors.append("store.id_column is required (the API id/tag column)")
     if not cfg.source.survey_id:
         errors.append("source.survey_id is required")
+    if not 0 <= cfg.source.days_back <= MAX_DAYS_BACK:
+        errors.append(
+            f"source.days_back must be 0..{MAX_DAYS_BACK} (0 = full history), "
+            f"got {cfg.source.days_back!r}"
+        )
 
     if cfg.binding.mode not in VALID_MODES:
         errors.append(

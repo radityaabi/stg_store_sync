@@ -87,6 +87,14 @@ ids — is the whole runtime.
   endpoint, so writes cost `rows × (latency + throttle)`. The GUI/CLI default
   is 0.05 s; for a large first sync this is the remaining runtime floor. Lower
   it only while STG stays responsive.
+- **Fetch window** — for a survey whose history is too large to export whole
+  (>10k interviews), tick **Fetch only the last N day(s)** in the job's Config
+  tab (or set `source.days_back: N` in YAML). Unticked — the default — keeps the
+  full history. A window reads interviews by **upload** time (server arrival),
+  whole days back from today, so late-synced device data still lands. It narrows
+  the id list only; nothing in the store is deleted, so interviews outside the
+  window are simply not considered. The run log states the window it used
+  (`296 interview(s) — last 3 day(s), upload time`).
 
 The run log streams live progress (`pulling interview data: 500/1569`,
 `adding rows: 12/1569`) and the pull line reports its own cost

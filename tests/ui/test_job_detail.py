@@ -77,7 +77,7 @@ def test_config_fields_round_trip():
         "store_id": 17620, "id_column": "No", "survey_id": "SURV",
         "match_source_var": "SbjNum", "match_store_col": "SbjNum",
         "dry_run": True, "survey_index": {}, "paired_survey_id": "",
-        "pic": "", "notify_enabled": True,
+        "pic": "", "notify_enabled": True, "days_back": 0,
     }
 
 
@@ -183,7 +183,7 @@ def test_run_progress_text_per_stage():
     d = JobDetail()
     d.load(E(), a_job())
     for ev in (
-        {"stage": "ids", "total": 296},
+        {"stage": "ids", "total": 296, "days_back": 0},
         {"stage": "pull", "total": 296},
         {"stage": "store", "total": 1},
         {"stage": "plan", "counts": {"add": 296, "delete": 1}},
@@ -200,6 +200,15 @@ def test_run_progress_text_per_stage():
     assert "dry run" in lines[5].lower()
     assert "ok" in lines[6].lower()
     assert "dry run" in lines[6].lower()  # the finished line flags simulation too
+
+
+def test_ids_line_reports_the_fetch_window():
+    d = JobDetail()
+    d.load(E(), a_job())
+    d.set_run_progress({"stage": "ids", "total": 296, "days_back": 0})
+    assert "all history" in d.progress_text.toPlainText().lower()
+    d.set_run_progress({"stage": "ids", "total": 42, "days_back": 3})
+    assert "last 3 day" in d.progress_text.toPlainText().lower()
 
 
 def test_run_progress_cleared_and_hidden():
@@ -303,6 +312,37 @@ def test_config_fields_tolerates_whitespace():
     assert not hasattr(d, "window_days_edit")
     assert not hasattr(d, "date_type_edit")
     assert not hasattr(d, "schedule_edit")
+
+
+def test_days_back_spinbox_round_trips():
+    d = JobDetail()
+    job = a_job()
+    job.source.days_back = 7
+    d.load(E(), job)
+    assert d.days_back_check.isChecked() is True
+    assert d.days_back_spin.value() == 7
+    assert d.config_fields()["days_back"] == 7
+    d.days_back_check.setChecked(False)          # unticking = full history
+    assert d.config_fields()["days_back"] == 0
+
+
+def test_days_back_defaults_off_and_untouched_count_is_kept():
+    d = JobDetail()
+    d.load(E(), a_job())
+    assert d.days_back_check.isChecked() is False
+    assert d.config_fields()["days_back"] == 0
+    # Ticking reuses the remembered day count instead of forcing the minimum.
+    d.days_back_spin.setValue(14)
+    d.days_back_check.setChecked(True)
+    assert d.config_fields()["days_back"] == 14
+
+
+def test_days_back_spinbox_documents_full_history_as_unchecked():
+    d = JobDetail()
+    assert d.days_back_spin.minimum() == 1     # 0 is the unchecked state, not a value
+    assert d.days_back_spin.maximum() == 90
+    assert "full history" in d.days_back_check.toolTip().lower()
+    assert d.days_back_spin.isEnabled() is False
 
 
 def test_rail_buttons_carry_design_icons_and_object_names():

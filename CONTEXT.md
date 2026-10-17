@@ -79,6 +79,16 @@ The token given to `SimpleExport`'s `variableNames` filter (`QPM1`, not
 input.
 _Avoid_: filter term, base name (prefer pull term).
 
+**Fetch window** (`days_back`):
+The optional number of days back a run reads interviews from, measured on
+**upload** time (`dateType=Upload`), whole days only. `0` means the source
+survey's full history. In the GUI it is a checkbox — "Fetch only the last N
+day(s)", **off by default** — with a day count enabled only while the box is
+ticked; `0` is the unticked state, never a number the operator types. It is an
+optimisation for oversized surveys, never a narrowing of correctness: the tool
+does not delete, so an interview outside the window is simply not seen.
+_Avoid_: date filter, range, window_days (the removed legacy field).
+
 **Pairing**:
 The one-time prep action that reads the survey definition and records, per
 column, the question-level pull term (`QPM1`), plus the cached survey index.

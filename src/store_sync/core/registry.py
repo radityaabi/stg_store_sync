@@ -41,6 +41,13 @@ _PAIRING_COLUMNS = (
     ("paired_survey_id", "TEXT NOT NULL DEFAULT ''"),
 )
 
+_FETCH_WINDOW_COLUMNS = (
+    # (column, DDL) — optional fetch window: pull only the last N days of
+    # server-arrival (`dateType=Upload`). 0 = the survey's full history, which
+    # is what every pre-existing job gets.
+    ("days_back", "INTEGER NOT NULL DEFAULT 0"),
+)
+
 _PIC_COLUMNS = (
     # (column, DDL) — the per-job PIC recipient list (run notifications).
     ("pic", "TEXT NOT NULL DEFAULT ''"),
@@ -66,6 +73,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     schedule_weekday INTEGER NOT NULL DEFAULT 0,
     survey_index     TEXT NOT NULL DEFAULT '{}',
     paired_survey_id TEXT NOT NULL DEFAULT '',
+    days_back      INTEGER NOT NULL DEFAULT 0,
     pic            TEXT NOT NULL DEFAULT '',
     notify_enabled INTEGER NOT NULL DEFAULT 1,
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
@@ -134,6 +142,7 @@ class Registry:
         self.conn.executescript(_SCHEMA)
         self._add_schedule_columns()
         self._add_pairing_columns()
+        self._add_fetch_window_columns()
         self._add_pic_column()
         self._drop_legacy_columns(("window_days", "date_type", "schedule", "delete_policy"))
         self.conn.commit()
@@ -174,6 +183,20 @@ class Registry:
             self.conn.execute(
                 "ALTER TABLE job_columns ADD COLUMN pull_term TEXT NOT NULL DEFAULT ''"
             )
+
+    def _add_fetch_window_columns(self) -> None:
+        """Add the optional fetch-window column when an older DB lacks it.
+
+        An existing job reads back `days_back=0` — full history, exactly the
+        behavior it had before the column existed.
+        """
+        present = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(jobs)")
+        }
+        for col, ddl in _FETCH_WINDOW_COLUMNS:
+            if col not in present:
+                self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
 
     def _add_pic_column(self) -> None:
         """Add the PIC column when an older DB lacks it.
@@ -217,6 +240,7 @@ class Registry:
             int(bool(job.write.dry_run)),
             json.dumps(job.source.survey_index),
             str(job.source.paired_survey_id),
+            int(job.source.days_back or 0),
             str(job.pic),
             int(bool(job.notify_enabled)),
         )
@@ -310,10 +334,11 @@ class Registry:
                 cur = self.conn.execute(
                     "INSERT INTO jobs (name, store_id, id_column, survey_id, "
                     "match_source_var, match_store_col, "
-                    "dry_run, survey_index, paired_survey_id, pic, notify_enabled, "
+                    "dry_run, survey_index, paired_survey_id, days_back, "
+                    "pic, notify_enabled, "
                     "enabled, "
                     "schedule_unit, schedule_every, schedule_at, schedule_weekday) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, int(bool(enabled)),
                      *self._schedule_values(schedule)),
                 )
@@ -336,8 +361,8 @@ class Registry:
         sets = [
             "store_id = ?", "id_column = ?", "survey_id = ?",
             "match_source_var = ?", "match_store_col = ?",
-            "dry_run = ?", "survey_index = ?", "paired_survey_id = ?", "pic = ?",
-            "notify_enabled = ?",
+            "dry_run = ?", "survey_index = ?", "paired_survey_id = ?",
+            "days_back = ?", "pic = ?", "notify_enabled = ?",
             "name = ?",
         ]
         # values order matches `sets`; job name for the WHERE is the last value.
@@ -385,6 +410,7 @@ class Registry:
                 row["survey_id"],
                 survey_index=json.loads(row["survey_index"] or "{}"),
                 paired_survey_id=row["paired_survey_id"],
+                days_back=int(row["days_back"] or 0),
             ),
             binding=BindingConfig(
                 match=ColumnBinding(row["match_source_var"], row["match_store_col"]),

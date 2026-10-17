@@ -123,6 +123,18 @@ class JobDialog(QDialog):
         self.dry_run_check = QCheckBox("Dry run")
         self.dry_run_check.setChecked(True)
         form.addRow("", self.dry_run_check)
+        self.days_back_check = QCheckBox("Fetch only the last")
+        self.days_back_check.setChecked(False)
+        self.days_back_check.toggled.connect(self._update_days_back_enabled)
+        self.days_back_spin = QSpinBox()
+        self.days_back_spin.setRange(1, 90)
+        self.days_back_spin.setValue(7)
+        self.days_back_spin.setSuffix(" day(s)")
+        self.days_back_spin.setToolTip(
+            "Number of days back to read, counted from today (upload time)."
+        )
+        form.addRow(self.days_back_check, self.days_back_spin)
+        self._update_days_back_enabled(False)
         self.enabled_check = QCheckBox("Enabled")
         form.addRow("", self.enabled_check)
         self.schedule_unit_combo = QComboBox()
@@ -184,6 +196,10 @@ class JobDialog(QDialog):
                 match.store_col if match else ""
             )
             self.dry_run_check.setChecked(bool(job.write.dry_run))
+            self.days_back_check.setChecked(bool(job.source.days_back))
+            if job.source.days_back:
+                self.days_back_spin.setValue(int(job.source.days_back))
+            self._update_days_back_enabled(self.days_back_check.isChecked())
             self.binding_model.set_columns(job.binding.columns)
 
     def job(self) -> JobConfig:
@@ -198,6 +214,7 @@ class JobDialog(QDialog):
             ),
             source=SourceConfig(
                 survey_id=self.survey_id_edit.text().strip(),
+                days_back=self.days_back(),
             ),
             binding=BindingConfig(
                 match=match,
@@ -227,6 +244,14 @@ class JobDialog(QDialog):
         widx = self.schedule_weekday_combo.findData(int(schedule.weekday))
         if widx >= 0:
             self.schedule_weekday_combo.setCurrentIndex(widx)
+
+    def _update_days_back_enabled(self, on: bool) -> None:
+        """The day count only means something when the window is on."""
+        self.days_back_spin.setEnabled(bool(on))
+
+    def days_back(self) -> int:
+        """The configured fetch window: `0` when the checkbox is off."""
+        return self.days_back_spin.value() if self.days_back_check.isChecked() else 0
 
     def _refresh_schedule_fields(self, *args) -> None:
         refresh_schedule_ui(

@@ -220,3 +220,29 @@ def test_notify_enabled_round_trips_when_false():
     d = sample_dict(); d["notify_enabled"] = False
     assert JobConfig.from_dict(d).notify_enabled is False
     assert JobConfig.from_dict(d).to_dict()["notify_enabled"] is False
+
+
+def test_days_back_defaults_to_full_history():
+    assert SourceConfig.from_dict({"survey_id": "SURV"}).days_back == 0
+
+
+def test_days_back_round_trips():
+    s = SourceConfig("SURV", days_back=7)
+    assert SourceConfig.from_dict(s.to_dict()) == s
+    assert s.to_dict()["days_back"] == 7
+
+
+def test_days_back_omitted_from_yaml_when_zero():
+    assert "days_back" not in SourceConfig("SURV").to_dict()
+
+
+def test_days_back_accepts_string_from_yaml():
+    # A hand-edited `days_back: "3"` must not crash the config load.
+    assert SourceConfig.from_dict({"survey_id": "S", "days_back": "3"}).days_back == 3
+
+
+def test_days_back_rejects_negative():
+    d = sample_dict()
+    d["source"]["days_back"] = -1
+    with pytest.raises(ValueError, match="days_back"):
+        JobConfig.from_dict(d)

@@ -165,6 +165,32 @@ def test_job_dialog_defaults():
     assert dlg.dry_run_check.isChecked() is True
     assert dlg.enabled is False
     assert dlg.binding_model.rowCount() == 0
+    assert dlg.days_back_check.isChecked() is False
+    assert dlg.days_back_spin.isEnabled() is False
+
+
+def test_job_dialog_days_back_round_trips():
+    dlg = JobDialog()
+    dlg.days_back_check.setChecked(True)
+    dlg.days_back_spin.setValue(5)
+    assert dlg.job().source.days_back == 5
+    dlg2 = JobDialog(job=_job_with_days_back(9))
+    assert dlg2.days_back_check.isChecked() is True
+    assert dlg2.days_back_spin.value() == 9
+    assert dlg2.job().source.days_back == 9
+
+
+def test_job_dialog_unticked_window_means_full_history():
+    dlg = JobDialog(job=_job_with_days_back(9))
+    dlg.days_back_check.setChecked(False)
+    assert dlg.job().source.days_back == 0
+
+
+def _job_with_days_back(n: int) -> JobConfig:
+    return JobConfig("a", StoreConfig(17620, "No"),
+        SourceConfig("SURV", days_back=n),
+        BindingConfig(ColumnBinding("SbjNum", "SbjNum"), [ColumnBinding("T_X", "X")]),
+        WriteConfig())
 
 
 def test_job_dialog_opens_usably_sized():

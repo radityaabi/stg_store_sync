@@ -186,6 +186,37 @@ def test_delete_cascades_columns(reg):
     assert count == 0
 
 
+def test_days_back_round_trips(tmp_path):
+    r = Registry(tmp_path / "reg.db")
+    job = a_job()
+    job.source.days_back = 4
+    r.add(job)
+    assert r.get("link1").source.days_back == 4
+    r.update("link1", a_job())              # back to full history
+    assert r.get("link1").source.days_back == 0
+    r.close()
+
+
+def test_migration_adds_days_back_column(tmp_path):
+    import sqlite3
+    db = tmp_path / "reg.db"
+    con = sqlite3.connect(db)
+    con.executescript(
+        "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,"
+        " store_id INTEGER, id_column TEXT, survey_id TEXT, match_source_var TEXT,"
+        " match_store_col TEXT, dry_run INTEGER DEFAULT 1, enabled INTEGER DEFAULT 0);"
+    )
+    con.execute("INSERT INTO jobs (name, store_id, id_column, survey_id,"
+                " match_source_var, match_store_col) VALUES ('old', 1, 'No', 'S',"
+                " 'SbjNum', 'SbjNum')")
+    con.commit(); con.close()
+    r = Registry(db)
+    cols = {row["name"] for row in r.conn.execute("PRAGMA table_info(jobs)")}
+    assert "days_back" in cols
+    assert r.get("old").source.days_back == 0     # existing job = full history
+    r.close()
+
+
 def test_migration_drops_window_columns(tmp_path):
     import sqlite3
     db = tmp_path / "reg.db"

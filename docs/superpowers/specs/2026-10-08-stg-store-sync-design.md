@@ -187,6 +187,29 @@ name is resolved as follows:
 variable.** The pull term is an internal optimisation, shown **read-only** in the
 binding grid, never a required input. The filter is never a correctness dependency.
 
+### 2.9 Fetch window (optional `source.days_back`)
+
+A source survey with a very large history (>10k interviews) makes every pull
+expensive: `/SurveyInterviewIDs` returns every id, and `/SimpleExport` then
+chunks that whole set (~16 requests per 1500 interviews). `source.days_back`
+narrows the **id** step — the export still carries exactly the ids it is given.
+
+- `days_back = 0` (default) → **full history**, the previous behavior, no
+  `dateStart`/`dateEnd`/`dateType` sent. The GUI exposes this as a checkbox,
+  **off by default**; ticking it reveals/enables the day count.
+- `days_back = N` → `dateStart = start-of-day(today - N)`,
+  `dateEnd = end-of-day(today)`, `dateType = Upload`, in the C# round-trip format
+  (`2026-10-17T00:00:00.0000000`).
+- `Upload` (server-arrival time), not `Submit`: an interview answered offline
+  earlier still counts on the day it reached the server. This matches the proven
+  `stg_pull_by_date.py` puller.
+
+This is an **optimisation, never a correctness narrowing**: the tool has no
+delete, so an interview outside the window is simply not considered — nothing in
+the store is touched, and the blacklist is reconciled against the *store*
+snapshot (not the pull), so a narrow window can never be read as a mass deletion.
+A run log line states the window ("all history" / "last N day(s), upload time").
+
 ---
 
 ## 3. Goals / Non-Goals
@@ -467,9 +490,11 @@ stg-store-sync/
 job: gran_turismo_link1
 store:  { id: 17417, id_column: "uniqueID" }   # user-declared IsTag; verified on the run
 source: { survey_id: "60824d46-9b2e-41e5-8b47-ae11410ee24d",
-          variable_names: ["QPM1", "Q32", "SbjNum"] }  # question-level base names (probe F9)
+          days_back: 0 }             # 0 = full history; N = last N days by Upload
+                                     # GUI: "Fetch only the last N day(s)" checkbox, off by default
 # window_days / date_type removed: every sync pulls full history
 # (superseded by 2026-10-08-registration-and-schedule-redesign-design.md)
+# `days_back` is the supported opt-in fetch window (see the fetch-window note below).
 binding:
   mode: mapped                     # mapped | strict
   match:   { source_var: "SbjNum", store_col: "SbjNum" }   # per-interview key

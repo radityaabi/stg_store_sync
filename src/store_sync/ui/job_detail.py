@@ -141,7 +141,31 @@ class JobDetail(QWidget):
         self.dry_run_check = QCheckBox("Dry run")
         self.dry_run_check.setChecked(True)
         row4.addWidget(self.dry_run_check)
+        row4.addStretch(1)
         lay.addLayout(row4)
+
+        window_row = QHBoxLayout()
+        self.days_back_check = QCheckBox("Fetch only the last")
+        self.days_back_check.setChecked(False)
+        self.days_back_check.setToolTip(
+            "Limit the pull to interviews that reached the server recently "
+            "(upload time). Leave it off to read the survey's full history."
+        )
+        self.days_back_check.toggled.connect(self._update_days_back_enabled)
+        window_row.addWidget(self.days_back_check)
+        self.days_back_spin = QSpinBox()
+        self.days_back_spin.setRange(1, 90)
+        self.days_back_spin.setValue(7)
+        self.days_back_spin.setSuffix(" day(s)")
+        self.days_back_spin.setToolTip(
+            "Number of days back to read, counted from today. Whole days, "
+            "upload time. Only used when the checkbox is ticked."
+        )
+        window_row.addWidget(self.days_back_spin)
+        window_row.addWidget(QLabel("(upload time)"))
+        window_row.addStretch(1)
+        lay.addLayout(window_row)
+        self._update_days_back_enabled(False)
 
         pic_row = QHBoxLayout()
         pic_row.addWidget(QLabel("PIC emails:"))
@@ -422,6 +446,10 @@ class JobDetail(QWidget):
             (match.store_col if match else "") or (match.source_var if match else "")
         )
         self.dry_run_check.setChecked(bool(job.write.dry_run))
+        self.days_back_check.setChecked(bool(job.source.days_back))
+        if job.source.days_back:
+            self.days_back_spin.setValue(int(job.source.days_back))
+        self._update_days_back_enabled(self.days_back_check.isChecked())
         self.pic_edit.setText(job.pic)
         self.notify_check.setChecked(bool(job.notify_enabled))
         self._update_pic_warning(job.pic)
@@ -514,6 +542,7 @@ class JobDetail(QWidget):
             "match_source_var": self.match_var_edit.text().strip(),
             "match_store_col": self.match_store_edit.text().strip(),
             "dry_run": self.dry_run_check.isChecked(),
+            "days_back": self.days_back(),
             "survey_index": dict(self._survey_index),
             "paired_survey_id": self._paired_survey_id,
             "pic": self.pic_edit.text().strip(),
@@ -523,6 +552,14 @@ class JobDetail(QWidget):
     def _update_pic_warning(self, text: str) -> None:
         """Warn (never block) about PIC entries that are not email addresses."""
         self.pic_warning.setText(pic_email_warning(text))
+
+    def _update_days_back_enabled(self, on: bool) -> None:
+        """The day count only means something when the window is on."""
+        self.days_back_spin.setEnabled(bool(on))
+
+    def days_back(self) -> int:
+        """The configured fetch window: `0` when the checkbox is off."""
+        return self.days_back_spin.value() if self.days_back_check.isChecked() else 0
 
     # -- slots -------------------------------------------------------------
     def schedule(self) -> Schedule:
@@ -594,7 +631,13 @@ def _progress_line(event: dict) -> str:
     stage = event.get("stage", "")
     label = _STAGE_TEXT.get(stage, stage)
     if stage == "ids":
-        return f"· {label}: {event.get('total', 0)} interview(s)"
+        window = ""
+        days = event.get("days_back")
+        if days:
+            window = f" — last {days} day(s), upload time"
+        elif days == 0:
+            window = " — all history"
+        return f"· {label}: {event.get('total', 0)} interview(s){window}"
     if stage == "pull":
         total = event.get("total", 0)
         reqs = event.get("requests")

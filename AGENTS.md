@@ -14,7 +14,7 @@ default.**
 Standalone repo — **never import from `stg_automation_suite`** (or any sibling
 repo). Reference only.
 
-Status: core + GUI + CLI implemented; **634 tests green**; not yet enabled for a
+Status: core + GUI + CLI implemented; **652 tests green**; not yet enabled for a
 live write. See `tasks/todo.md` for the phase ledger.
 
 ## Stack & layout
@@ -134,6 +134,17 @@ Violating any of these corrupts production data or the safety model:
     Mailing is **per-job opt-out** (`jobs.notify_enabled`, GUI checkbox, default
     ON); a run mails only when `notify` (the `--no-notify` invocation flag) is
     true **and** the job's toggle is on. Turning it off never affects the run.
+
+16. **The fetch window is an optimisation, never a narrowing of correctness.**
+    `source.days_back = 0` (default, GUI checkbox off) pulls the survey's full
+    history;
+    `N > 0` sends `dateType=Upload`, `dateStart = start-of-day(today - N)`,
+    `dateEnd = end-of-day(today)` to `/SurveyInterviewIDs` and reads only the
+    ids it returns. Because the tool never deletes, an interview outside the
+    window is simply not considered; the blacklist is reconciled against the
+    **store** snapshot, never the pull, so a narrow window can never be mistaken
+    for a mass hand-deletion. `Upload` (server-arrival), not `Submit`, so
+    late-synced device data still lands.
 
 ## Docs — source of truth
 

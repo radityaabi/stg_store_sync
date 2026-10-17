@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from store_sync.core.binding import noop_probe
 from store_sync.core.config import JobConfig
@@ -27,6 +28,37 @@ from store_sync.core.stg_client import Cancelled
 from store_sync.core.writer import apply_plan
 
 logger = logging.getLogger(__name__)
+
+# STG wants C# round-trip stamps: `2026-07-18T00:00:00.0000000` (7 fractional
+# digits). `%f` prints 6, so one trailing zero is appended.
+_STG_DATE_TYPE = "Upload"   # server-arrival time; `Submit` misses late uploads
+
+
+def _stg_stamp(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f0")
+
+
+def pull_window(days_back: int, *, now: datetime | None = None
+                ) -> tuple[str, str] | None:
+    """The `(date_start, date_end)` window for a `days_back` setting.
+
+    `None` means "no window at all" — the survey's full history, which is what
+    `days_back=0` asks for. Otherwise the window is `days_back` whole days back
+    from today, local time, start-of-day → end-of-day (`23:59:59`), matching the
+    proven momo puller. Whole days matter: a partial-day window would silently
+    drop interviews that landed earlier today.
+    """
+    if not days_back or days_back <= 0:
+        return None
+    today = now or datetime.now()
+    start = (today - timedelta(days=int(days_back))).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = today.replace(
+        hour=23, minute=59, second=59, microsecond=0
+    )
+    return _stg_stamp(start), _stg_stamp(end)
+
 
 
 def _readiness_errors(config, store_rows, source_records) -> list[str]:
@@ -201,8 +233,27 @@ def _run_sync_inner(
 
         # 1) survey index + pull ---------------------------------------------
         index = dict(config.source.survey_index)
-        subject_ids = client.survey_interview_ids(config.source.survey_id)
-        _emit("ids", total=len(subject_ids))
+        window = pull_window(config.source.days_back)
+        if window is None:
+            subject_ids = client.survey_interview_ids(config.source.survey_id)
+        else:
+            # Opt-in narrowing for a survey whose full history is too large to
+            # export. Uses server-arrival time (`Upload`) so late-synced device
+            # data still lands; the run never deletes, so rows outside the
+            # window are simply not considered.
+            subject_ids = client.survey_interview_ids(
+                config.source.survey_id,
+                date_type=_STG_DATE_TYPE,
+                date_start=window[0],
+                date_end=window[1],
+            )
+        _emit(
+            "ids",
+            total=len(subject_ids),
+            days_back=int(config.source.days_back or 0),
+            date_start=window[0] if window else None,
+            date_end=window[1] if window else None,
+        )
         match = config.binding.match
         try:
             pulled = pull(

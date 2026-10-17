@@ -4,6 +4,8 @@ Wires §7.2: survey index -> pull -> load store -> plan -> apply -> state.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 
 from store_sync.core.config import (
@@ -17,7 +19,7 @@ from store_sync.core.config import (
 from store_sync.core.fetcher import parse_survey_index
 from store_sync.core.state import State
 from store_sync.core.stg_client import STGError
-from store_sync.core.sync import run_sync
+from store_sync.core.sync import pull_window, run_sync
 
 SURVEY_XML = """<?xml version="1.0"?>
 <Survey>
@@ -28,6 +30,13 @@ SURVEY_XML = """<?xml version="1.0"?>
 """
 
 _PAIRED_INDEX = parse_survey_index(SURVEY_XML)  # {"T_QPM1_1": "QPM1", "Q32": "Q32"}
+
+# STG stamps are C# round-trip format: 7 fractional digits (the last is 0).
+_STAMP = "%Y-%m-%dT%H:%M:%S.%f"
+
+
+def _dt(stamp: str) -> datetime:
+    return datetime.strptime(stamp[:-1], _STAMP)   # drop the 7th digit
 
 
 def config(*, dry_run=True, id_column="No", mode="mapped", columns=None, paired=True):
@@ -412,6 +421,44 @@ class TestReadiness:
         c = FakeClient(store=store_rows(), subjects=subjects())
         run_sync(config(dry_run=True), client=c, state=st)
         assert c.id_kwargs == {}          # no date_start / date_type
+
+    def test_days_back_narrows_the_pull_window(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        cfg = config(dry_run=True)
+        cfg.source.days_back = 3
+        run_sync(cfg, client=c, state=st)
+        kw = c.id_kwargs
+        assert kw["date_type"] == "Upload"      # server-arrival time, like momo
+        start, end = _dt(kw["date_start"]), _dt(kw["date_end"])
+        assert start.date() == end.date() - timedelta(days=3)
+
+    def test_days_back_window_covers_whole_days(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        cfg = config(dry_run=True)
+        cfg.source.days_back = 1
+        run_sync(cfg, client=c, state=st)
+        start, end = _dt(c.id_kwargs["date_start"]), _dt(c.id_kwargs["date_end"])
+        assert (start.hour, start.minute, start.second) == (0, 0, 0)
+        assert (end.hour, end.minute) == (23, 59)
+
+    def test_pull_window_helper_is_none_for_full_history(self):
+        assert pull_window(0) is None
+
+    def test_pull_window_helper_returns_stamp_pair(self):
+        start, end = pull_window(2)
+        s, e = _dt(start), _dt(end)
+        assert s.date() == e.date() - timedelta(days=2)
+        assert start.endswith(".0000000")        # C# round-trip format STG wants
+
+    def test_days_back_reports_window_in_run_log(self, st):
+        c = FakeClient(store=store_rows(), subjects=subjects())
+        events = []
+        cfg = config(dry_run=True)
+        cfg.source.days_back = 5
+        run_sync(cfg, client=c, state=st, progress=events.append)
+        ids = [e for e in events if e["stage"] == "ids"][0]
+        assert ids["days_back"] == 5
+        assert ids["date_start"]
 
     def test_missing_id_column_blocks_before_write(self, st):
         c = FakeClient(store=store_rows(), subjects=subjects())

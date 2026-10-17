@@ -278,3 +278,39 @@
 - [ ] 19.10 Open — `_as_subjects`/`_as_list`/`_as_ids` still fold a
   `{"Error": ...}` body into `[]`. With the clamp in place the known trigger is
   gone, but the swallow remains for any other STG error shape.
+
+## Task 20 — Optional fetch window (`days_back`)
+
+> Motivation: a source survey with a very large history (>10k interviews) makes
+> every pull expensive — `/SurveyInterviewIDs` returns everything, and
+> `/SimpleExport` then chunks that whole set. Same lever the momo tool exposes
+> as `fetch_days_back`. Opt-in: `0` keeps today's full-history behavior.
+
+- [x] 20.1 `core/config.py` — `SourceConfig.days_back: int = 0` (+ `MAX_DAYS_BACK
+  = 90`); YAML round-trip, omitted when 0; `_int_or_zero` tolerates `"3"` and
+  garbage (falls back to 0); `validate` rejects out-of-range. Legacy
+  `window_days`/`date_type` still ignored.
+- [x] 20.2 `core/registry.py` — `jobs.days_back INTEGER NOT NULL DEFAULT 0`,
+  added by `_add_fetch_window_columns()` for an older DB (existing jobs read
+  back 0 = full history); persisted in `_config_values` / `add` / `update` /
+  `get`.
+- [x] 20.3 `core/sync.py` — `pull_window(days_back)` → `None` for 0, else
+  `(start-of-day(today - N), end-of-day(today))` in C# round-trip format; the
+  run passes `date_type="Upload"` + `date_start`/`date_end` to
+  `survey_interview_ids`, and emits the window on the `ids` progress event.
+- [x] 20.4 `ui/job_detail.py` + `ui/dialogs.py` + `gui.py` — **"Fetch only the
+  last N day(s)" checkbox (off by default)** + day-count spinbox (1–90, enabled
+  only while ticked) in the Config tab and the new-store dialog;
+  `config_fields()` / `_job_from_detail` / `JobDialog.job` carry it; unticking
+  means full history. The run timeline's `ids` line reads `— last N day(s),
+  upload time` or `— all history`.
+- [x] 20.5 Tests — **652 green** (18 new: config default/round-trip/string/
+  negative, registry round-trip + column migration, window shape + whole-day
+  bounds + helper, UI checkbox/spinbox round-trip + disabled-when-unticked +
+  remembered count, dialog round-trip/untick, timeline line), both `pytest -q`
+  and `pytest -q -W error`.
+- [x] 20.6 Docs — spec §2.9 "Fetch window", `CONTEXT.md` glossary entry
+  (Fetch window), AGENTS.md invariant 16 + test count, README "Tuning a large
+  survey".
+- [ ] 20.7 Open — the window is per-job config only; there is no per-run
+  override (`--days-back` on the CLI). Add one only if operators ask.
