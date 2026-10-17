@@ -61,6 +61,30 @@ verified; see `docs/probe/2026-10-08-fase0-findings.md`. Product code not starte
 - Empty source values are **absent** from the export — treat them as `""` and
   write them; never skip.
 
+### Tuning a large survey
+
+A run is dominated by network round-trips, not local CPU (the planner diffs
+1569 × 1569 rows in ~0.05 s). Two knobs, both optional:
+
+- **Export chunk size** — one `SimpleExport` request per N ids. The default is
+  100 (the proven, conservative value: STG drops long chunked bodies), so a
+  1569-interview pull is 16 sequential requests. Raising it cuts wall-clock
+  roughly linearly:
+
+  ```bash
+  STG_EXPORT_CHUNK=500 stg-store-sync-cli run <name>
+  ```
+
+  Raise it gradually and watch for dropped bodies; a chunk that fails is
+  retried, never silently truncated.
+- **Write throttle** — `AddRow` is one POST per row and the API has no bulk
+  endpoint, so writes cost `rows × (latency + throttle)`. The GUI/CLI default
+  is 0.05 s; for a large first sync this is the whole runtime. Lower it only
+  while STG stays responsive.
+
+The run log streams live progress (`pulling interview data: 500/1569`,
+`adding rows: 12/1569`) so a long run never looks hung.
+
 ## Setup (once Phase 1 lands)
 
 ```bash

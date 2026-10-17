@@ -222,3 +222,23 @@
 - [x] 16.5 `gui.py`/`ui/dashboard.py` — multi-active status, per-run toasts, store-key enqueue
 - [x] 16.6 `gui.py`/`ui/main_window.py` — per-job stop
 - [x] 16.7 Docs — invariant 10/11, vocabulary, ledger
+
+## Phase 18 — Scale: 1–2k row runs ✅ COMPLETE
+> Trigger: a 1569-interview dry run (`add 0, update 2, same 1567`) was slow.
+> Measured first (`/tmp` harness: pipeline CPU, per-request latency, SQLite
+> fsyncs), then fixed only what the numbers indicted. Network, not CPU, is the
+> floor: the local pipeline is ~0.35 s for 1569 rows.
+
+- [x] 18.1 `core/binding.py` — `suggest_aliases` built `set(src_vals)` inside the
+  (store_col × source_var) loop: 25 740 rebuilds of ~1.5k values → **6.4 s → 3.2 s**
+- [x] 18.2 `core/preflight.py` + `core/sync.py` — `suggestions=False` on the in-run
+  gate (it reads only `errors`): run path **0.72 s → 0.35 s**
+- [x] 18.3 `core/state.py` — `State.transaction()`; one fsync per row was
+  **6.0 s / 1569 rows** → **0.01 s**, durability unchanged (one transaction)
+- [x] 18.4 `core/stg_client.py` — `STG_EXPORT_CHUNK` (default 100); 1569 ids is
+  16 sequential exports, and chunk dominates wall-clock
+- [x] 18.5 `core/stg_client.py`/`fetcher.py`/`sync.py`/`ui/job_detail.py` — live
+  pull progress (`pulling interview data: 500/1569`) via `on_chunk`
+- [x] 18.6 Tests — 612 green (4 new state/transaction, 6 preflight/chunk, 2 UI);
+  both `pytest -q` and `pytest -q -W error`
+- [x] 18.7 Docs — README "Tuning a large survey", `.env.example`
