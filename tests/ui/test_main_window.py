@@ -39,6 +39,7 @@ def test_proxy_signals_relay():
         "new_requested",
         "run_requested",
         "stop_requested",
+        "stop_job_requested",
         "edit_requested",
         "delete_requested",
         "save_requested",
@@ -71,7 +72,8 @@ def test_proxy_signals_relay():
 
     assert seen["new_requested"] == [()]
     assert seen["run_requested"] == [("a",), ("j1",)]
-    assert seen["stop_requested"] == [(), ()]  # dashboard + job detail
+    assert seen["stop_requested"] == [()]           # dashboard only
+    assert seen["stop_job_requested"] == [("j1",)]  # job detail carries the job
     assert seen["edit_requested"] == [("b",)]
     assert seen["delete_requested"] == [("c",)]
     assert seen["refresh_requested"] == [()]

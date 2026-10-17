@@ -44,7 +44,8 @@ class MainWindow(QMainWindow):
     # -- proxy signals (one per page intent the controller cares about) ----
     new_requested = Signal()
     run_requested = Signal(str)
-    stop_requested = Signal()
+    stop_requested = Signal()          # dashboard: stop every run
+    stop_job_requested = Signal(str)   # job detail: stop only that job
     edit_requested = Signal(str)
     delete_requested = Signal(str)
     save_requested = Signal()
@@ -133,7 +134,7 @@ class MainWindow(QMainWindow):
         self.job_detail.pair_requested.connect(self.pair_requested.emit)
         self.job_detail.automap_requested.connect(self.automap_requested.emit)
         self.job_detail.run_requested.connect(self._on_detail_run)
-        self.job_detail.stop_requested.connect(self.stop_requested.emit)
+        self.job_detail.stop_requested.connect(self._on_detail_stop)
         self.job_detail.import_requested.connect(self.import_requested.emit)
         self.job_detail.export_requested.connect(self.export_requested.emit)
         self.job_detail.run_activated.connect(self.run_activated.emit)
@@ -189,6 +190,11 @@ class MainWindow(QMainWindow):
     def _on_detail_run(self) -> None:
         if self._current_job is not None:
             self.run_requested.emit(self._current_job)
+
+    def _on_detail_stop(self) -> None:
+        """Detail-page Stop carries the open job so only that run stops."""
+        if self._current_job is not None:
+            self.stop_job_requested.emit(self._current_job)
 
     # -- lifecycle ---------------------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)

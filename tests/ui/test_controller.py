@@ -1319,3 +1319,14 @@ def test_run_now_passes_store_key(tmp_path):
     assert seen["store_key"] == str(c.registry.get("a").store.id)
     c.queue.enqueue = real
     c.stop(); w.close()
+
+
+def test_detail_stop_only_stops_that_job(tmp_path):
+    seen = []
+    w = MainWindow()
+    c = Controller(w, db_path=tmp_path / "s.db", run_fn=lambda name, stop: None)
+    c.queue.stop_current = lambda name=None: seen.append(name)
+    w.show_job("b")
+    w.job_detail.stop_requested.emit()
+    assert seen == ["b"]                 # scoped, not global
+    c.stop(); w.close()

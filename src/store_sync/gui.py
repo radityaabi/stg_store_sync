@@ -478,7 +478,8 @@ class Controller:
         w = self.window
         w.new_requested.connect(self._new)
         w.run_requested.connect(self.run_now)
-        w.stop_requested.connect(self.queue.stop_current)
+        w.stop_requested.connect(self.queue.stop_current)          # dashboard: all
+        w.stop_job_requested.connect(lambda name: self.queue.stop_current(name))
         w.edit_requested.connect(self._open_job)
         w.delete_requested.connect(self._confirm_delete)
         w.save_requested.connect(self._save_from_detail)
